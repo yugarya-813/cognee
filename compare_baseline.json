@@ -1,0 +1,7 @@
+{
+  "how many days can employees work remotely, and does payroll match?": {
+    "no_memory": "I can't answer that — I'm a general AI assistant with no access to any specific company's internal policies, so I don't know its remote-work allowance or payroll rules. You'd need to check that company's HR handbook or ask their HR team.",
+    "generic": "The stored facts are contradictory: some say employees may work 3 days per week remotely, while others require 5 days per week in-office. Payroll is similarly mixed — one record requires 3 days in-office for bonus eligibility and another requires 5. With no way to tell which is current, it's not clear whether payroll matches.",
+    "engram": "Employees are required to work 5 days per week in-office, with manager approval for occasional remote-work exceptions. Payroll matches: the PayrollRule requires 5 days in-office for bonus eligibility."
+  }
+}

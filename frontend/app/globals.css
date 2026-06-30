@@ -19,32 +19,67 @@ html, body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
 
-/* Sidebar nav links */
-.nav-link {
-  display: flex;
+/* ---- Top nav primary tabs ---- */
+.top-tab {
+  position: relative;
+  display: inline-flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 10px;
+  padding: 9px 14px;
   border-radius: 8px;
-  font-size: 13px;
-  color: rgba(255,255,255,0.45);
-  background: transparent;
+  font-size: 13.5px;
+  font-weight: 450;
+  color: rgba(255,255,255,0.55);
   text-decoration: none;
-  transition: background 150ms, color 150ms;
-  font-weight: 400;
+  transition: color 160ms ease, background 160ms ease;
 }
-.nav-link:hover {
-  background: rgba(255,255,255,0.05);
-  color: rgba(255,255,255,0.75);
+.top-tab:hover { color: #fff; background: rgba(255,255,255,0.05); }
+.top-tab.active { color: #fff; font-weight: 550; }
+.top-tab .ul {
+  position: absolute;
+  left: 14px; right: 14px; bottom: 4px;
+  height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, #3B82F6, #6366F1);
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform 220ms cubic-bezier(.4,0,.2,1);
 }
-.nav-link.active {
-  background: rgba(255,255,255,0.07);
-  color: #fff;
-  font-weight: 500;
+.top-tab:hover .ul { transform: scaleX(0.55); opacity: 0.7; }
+.top-tab.active .ul { transform: scaleX(1); opacity: 1; }
+
+/* ---- Sub tabs ---- */
+.sub-tab {
+  font-size: 12.5px;
+  font-weight: 450;
+  color: rgba(255,255,255,0.42);
+  text-decoration: none;
+  padding: 4px 12px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  transition: all 150ms ease;
+}
+.sub-tab:hover { color: rgba(255,255,255,0.8); background: rgba(255,255,255,0.04); }
+.sub-tab.active {
+  color: #93b4fc;
+  background: rgba(59,130,246,0.1);
+  border-color: rgba(59,130,246,0.3);
 }
 
-/* Commit browse button hover */
-.browse-btn:hover {
-  background: rgba(59,130,246,0.15) !important;
-  border-color: rgba(59,130,246,0.5) !important;
+/* ---- Page entrance transition ---- */
+.page-fade { animation: pageIn 380ms cubic-bezier(.22,.61,.36,1) both; }
+@keyframes pageIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
 }
+
+/* ---- Reusable hover lift for cards ---- */
+.lift { transition: transform 200ms cubic-bezier(.22,.61,.36,1), box-shadow 200ms ease, border-color 200ms ease, opacity 200ms ease; }
+.lift:hover { transform: translateY(-3px); }
+
+/* ---- Comparison tier cards ---- */
+.tier-card.weak { opacity: 0.76; }
+.tier-card.weak:hover { opacity: 0.96; border-color: rgba(255,255,255,0.15) !important; }
+.tier-card.hero:hover { box-shadow: 0 0 0 1px rgba(52,211,153,0.22), 0 14px 54px rgba(52,211,153,0.18) !important; }
+
+/* ---- Legacy sidebar nav links (kept harmless) ---- */
+.nav-link { display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:8px; font-size:13px; color:rgba(255,255,255,0.45); text-decoration:none; }
+.browse-btn:hover { background: rgba(59,130,246,0.15) !important; border-color: rgba(59,130,246,0.5) !important; }

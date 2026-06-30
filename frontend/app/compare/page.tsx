@@ -169,13 +169,13 @@ function TierCard({
 
   return (
     <div
+      className={`lift tier-card ${hero ? "hero" : "weak"}`}
       style={{
         position: "relative",
         background: hero ? "#0F1620" : "#0E111A",
         border: `1px solid ${hero ? "rgba(52,211,153,0.45)" : "rgba(255,255,255,0.07)"}`,
         borderRadius: 14,
         padding: "20px 20px 22px",
-        opacity: hero ? 1 : 0.78,
         boxShadow: hero ? "0 0 0 1px rgba(52,211,153,0.12), 0 8px 40px rgba(52,211,153,0.10)" : "none",
         display: "flex",
         flexDirection: "column",

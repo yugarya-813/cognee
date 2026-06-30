@@ -34,3 +34,5 @@ frontend.txt
 # Cognee local memory store (generated)
 .cognee/
 .cognee_system/
+
+.vercel
