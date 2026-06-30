@@ -891,11 +891,9 @@ async def compare_engram(body: CompareRequest):
     if err:
         return JSONResponse(status_code=503, content={"detail": err})
 
+    # Test status is the recorded result for the deployed commit (the live Tests
+    # page re-runs the suite on demand) — fast and reliable, no extra LLM call here.
     tests = _cached_tests(deployed)
-    if tests is None:
-        suite = await _run_test_suite(deployed)
-        if "error" not in suite:
-            tests = {"passed": suite["passed"], "total": suite["total"]}
 
     return {
         "tier": "engram",
@@ -917,17 +915,24 @@ def get_tests():
 
 
 def _cached_tests(commit: int):
-    """Read a previously-stored test result for a commit (facts at a commit
-    never change, so a cached pass/fail count stays valid)."""
+    """The test pass/fail count for a commit. Facts at a commit never change, so
+    a result stays valid. Prefers a live run cached this process; otherwise falls
+    back to tests_baseline.json — a recorded real run committed with the repo (like
+    a CI badge), so the comparison demo stays fast and reliable on serverless."""
     import json
     with get_conn() as conn:
         row = conn.execute(
             "SELECT value FROM app_state WHERE key = ?", (f"tests:{commit}",)
         ).fetchone()
-    if not row:
-        return None
+    if row:
+        try:
+            return json.loads(row["value"])
+        except Exception:  # noqa: BLE001
+            pass
     try:
-        return json.loads(row["value"])
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tests_baseline.json")
+        with open(path) as f:
+            return json.load(f).get(str(commit))
     except Exception:  # noqa: BLE001
         return None
 
