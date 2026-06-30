@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 import re
 import os
@@ -902,6 +903,40 @@ async def compare_engram(body: CompareRequest):
         "deployed_commit": deployed,
         "tests_passed": tests["passed"] if tests else None,
         "tests_total": tests["total"] if tests else None,
+    }
+
+
+@app.post("/compare/all")
+async def compare_all(body: CompareRequest):
+    """Run all three tiers for one question and return them together. The three
+    answers are produced concurrently; a tier that fails (e.g. rate-limited) is
+    reported with error=true instead of failing the whole response."""
+    deployed = _active_commit()
+
+    (nm_text, nm_err), (g_text, g_err), (e_answers, e_err) = await asyncio.gather(
+        _compare_no_memory(body.question),
+        _compare_generic(body.question),
+        _ask_llm(body.question, deployed),
+    )
+    tests = _cached_tests(deployed)
+
+    return {
+        "question": body.question,
+        "no_memory": {
+            "answer": nm_text or nm_err or "",
+            "error": bool(nm_err),
+        },
+        "generic": {
+            "answer": g_text or g_err or "",
+            "error": bool(g_err),
+        },
+        "engram": {
+            "answer": (e_answers[0] if e_answers else "") or e_err or "",
+            "error": bool(e_err),
+            "deployed_commit": deployed,
+            "tests_passed": tests["passed"] if tests else None,
+            "tests_total": tests["total"] if tests else None,
+        },
     }
 
 

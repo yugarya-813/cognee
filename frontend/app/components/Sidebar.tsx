@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV = [
+  { href: "/compare", label: "Compare", icon: <CompareIcon /> },
   { href: "/facts",   label: "Facts",   icon: <FactsIcon /> },
   { href: "/graph",   label: "Graph",   icon: <GraphIcon /> },
   { href: "/commits", label: "Commits", icon: <CommitsIcon /> },
@@ -64,6 +65,15 @@ export default function Sidebar() {
         </p>
       </div>
     </aside>
+  );
+}
+
+function CompareIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <rect x="1.5" y="2" width="4" height="10" rx="1" stroke="currentColor" strokeWidth="1.3"/>
+      <rect x="8.5" y="2" width="4" height="10" rx="1" stroke="currentColor" strokeWidth="1.3"/>
+    </svg>
   );
 }
 
