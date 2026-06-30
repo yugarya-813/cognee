@@ -1,13 +1,24 @@
 r"""Seed engram.db so the whole demo runs clean from scratch.
 
-Reproduces the exact state the demo expects:
-  - Commit 1: the initial company knowledge base (6 facts).
-  - Commit 2: the remote-work policy changes from "3 days remote" to
-    "5 days in-office" (the old fact is superseded, a new one is added).
+Builds a realistic, multi-commit memory history for a fictional company
+(Helix Labs) — the "git log" of an AI's memory. Each commit adds and/or
+supersedes facts, so the Facts, Graph, Commits and Changes pages all have
+rich, connected data to show.
 
-Note that PayrollRule still says "3 days in-office" at commit 2 ON PURPOSE —
-that is the downstream contradiction the memory tests are meant to catch.
-The fix (commit 3) is created live during the demo.
+The story (read it like a changelog):
+
+  1. Initial company knowledge base
+  2. Engineering org structure
+  3. Finance, Sales & Support teams
+  4. Company policies
+  5. Products & key customer
+  6. Series B — scale the Sales team
+  7. Remote-work policy changes 3 days -> 5 days   <-- the headline change
+  8. Payroll rule fixed to match the new policy     <-- the contradiction fix
+
+At commit 7 the PayrollRule still says "3 days" while the remote policy moved
+to "5 days" — that is the downstream contradiction the memory tests catch.
+Commit 8 resolves it, so tests pass 7/7 there.
 
 Run from the engram folder:
     .\venv\Scripts\python.exe seed.py
@@ -46,50 +57,109 @@ conn.execute("""
 """)
 
 # ---------------------------------------------------------------------------
-# Commit 1 — the initial company knowledge base
+# The history. Each commit is (message, [operations]).
+#   ("add",       subject, predicate, object, source)
+#   ("supersede", subject, predicate, object)            # retires an active fact
 # ---------------------------------------------------------------------------
-conn.execute("INSERT INTO commits (id, message) VALUES (1, 'Initial company knowledge base')")
+COMMITS = [
+    ("Initial company knowledge base", [
+        ("add", "Helix Labs", "is",                  "an AI robotics company",          "company-charter"),
+        ("add", "Helix Labs", "founded in",          "2019",                            "company-charter"),
+        ("add", "Helix Labs", "headquartered in",    "Austin, Texas",                   "company-charter"),
+        ("add", "Helix Labs", "mission is",          "building safe household robots",  "company-charter"),
+        ("add", "Dana Whitfield", "role",            "Chief Executive Officer",         "org-chart-2024"),
+        ("add", "Helix Labs", "flagship product is", "the Atlas home robot",            "product-catalog"),
+    ]),
 
-facts = [
-    ("RemoteWorkPolicy", "allows",    "3 days per week remote",                 "hr-handbook-v1"),
-    ("RemoteWorkPolicy", "requires",  "manager approval for full remote week",  "hr-handbook-v1"),
-    ("Alice Chen",       "role",      "Head of Engineering",                    "org-chart-2024"),
-    ("Bob Martins",      "role",      "Payroll Manager",                        "org-chart-2024"),
-    ("Engineering",      "headcount", "42 employees",                           "org-chart-2024"),
-    ("PayrollRule",      "requires",  "3 days in-office for bonus eligibility", "finance-policy"),
+    ("Add engineering org structure", [
+        ("add", "Alice Chen",  "role",       "Head of Engineering",        "org-chart-2024"),
+        ("add", "Engineering", "headcount",  "42 employees",               "org-chart-2024"),
+        ("add", "Engineering", "reports to", "Dana Whitfield",             "org-chart-2024"),
+        ("add", "Marcus Reed", "role",       "Senior Robotics Engineer",   "org-chart-2024"),
+        ("add", "Marcus Reed", "works in",   "Engineering",                "org-chart-2024"),
+        ("add", "Priya Nair",  "role",       "Machine Learning Lead",      "org-chart-2024"),
+        ("add", "Priya Nair",  "works in",   "Engineering",                "org-chart-2024"),
+    ]),
+
+    ("Add finance, sales & support teams", [
+        ("add", "Bob Martins",   "role",      "Payroll Manager",   "org-chart-2024"),
+        ("add", "Bob Martins",   "works in",  "Finance",           "org-chart-2024"),
+        ("add", "Finance",       "headcount", "11 employees",      "org-chart-2024"),
+        ("add", "Carlos Mendez", "role",      "Head of Sales",     "org-chart-2024"),
+        ("add", "Sales",         "headcount", "18 employees",      "org-chart-2024"),
+        ("add", "Support",       "headcount", "9 employees",       "org-chart-2024"),
+    ]),
+
+    ("Add company policies", [
+        ("add", "RemoteWorkPolicy", "allows",   "3 days per week remote",                 "hr-handbook-v1"),
+        ("add", "RemoteWorkPolicy", "requires", "manager approval for occasional remote-work exceptions", "hr-handbook-v1"),
+        ("add", "PayrollRule",      "requires", "3 days in-office for bonus eligibility", "finance-policy-v1"),
+        ("add", "PTOPolicy",        "grants",   "20 days paid time off per year",         "hr-handbook-v1"),
+        ("add", "SecurityPolicy",   "requires", "two-factor authentication for all staff","security-handbook"),
+    ]),
+
+    ("Add products & key customer", [
+        ("add", "Atlas",           "is",                   "a household assistant robot", "product-catalog"),
+        ("add", "Atlas",           "priced at",            "2400 dollars",                "pricing-2024"),
+        ("add", "Orbit",           "is",                   "a developer robotics SDK",    "product-catalog"),
+        ("add", "Northwind Retail","is",                   "our largest enterprise customer", "crm-export"),
+        ("add", "Northwind Retail","signed contract worth","1.2 million dollars",         "crm-export"),
+    ]),
+
+    ("Scale the Sales team after Series B", [
+        ("add",       "Helix Labs",   "raised", "60 million dollar Series B", "press-release-2025"),
+        ("supersede", "Sales",         "headcount", "18 employees"),
+        ("add",       "Sales",         "headcount", "31 employees",           "org-chart-2025"),
+        ("supersede", "Carlos Mendez", "role", "Head of Sales"),
+        ("add",       "Carlos Mendez", "role", "VP of Sales",                 "org-chart-2025"),
+    ]),
+
+    ("Update remote-work policy to 5 days per week", [
+        ("supersede", "RemoteWorkPolicy", "allows",   "3 days per week remote"),
+        ("add",       "RemoteWorkPolicy", "requires", "5 days per week in-office", "hr-handbook-v2"),
+    ]),
+
+    ("Fix payroll rule to match the new in-office policy", [
+        ("supersede", "PayrollRule", "requires", "3 days in-office for bonus eligibility"),
+        ("add",       "PayrollRule", "requires", "5 days in-office for bonus eligibility", "finance-policy-v2"),
+    ]),
 ]
-conn.executemany(
-    "INSERT INTO facts (subject, predicate, object, source, commit_id) VALUES (?,?,?,?,1)",
-    facts,
-)
 
-# ---------------------------------------------------------------------------
-# Commit 2 — remote-work policy changes from 3 days remote to 5 days in-office
-# ---------------------------------------------------------------------------
-conn.execute("INSERT INTO commits (id, message) VALUES (2, 'Update remote-work policy to 5 days per week')")
 
-# Supersede the old policy fact...
-conn.execute(
-    """
-    UPDATE facts SET status = 'superseded', superseded_commit_id = 2
-    WHERE subject = 'RemoteWorkPolicy'
-      AND predicate = 'allows'
-      AND object = '3 days per week remote'
-    """
-)
-# ...and add the new one.
-conn.execute(
-    """
-    INSERT INTO facts (subject, predicate, object, source, commit_id)
-    VALUES ('RemoteWorkPolicy', 'allows', '5 days per week in-office', 'hr-handbook-v2', 2)
-    """
-)
+def apply_commit(commit_id: int, ops: list) -> None:
+    for op in ops:
+        kind = op[0]
+        if kind == "add":
+            _, subject, predicate, obj, source = op
+            conn.execute(
+                "INSERT INTO facts (subject, predicate, object, source, commit_id) VALUES (?,?,?,?,?)",
+                (subject, predicate, obj, source, commit_id),
+            )
+        elif kind == "supersede":
+            _, subject, predicate, obj = op
+            conn.execute(
+                """
+                UPDATE facts
+                SET status = 'superseded', superseded_commit_id = ?
+                WHERE subject = ? AND predicate = ? AND object = ? AND status = 'active'
+                """,
+                (commit_id, subject, predicate, obj),
+            )
+        else:
+            raise ValueError(f"Unknown op: {kind}")
+
+
+for i, (message, ops) in enumerate(COMMITS, start=1):
+    conn.execute("INSERT INTO commits (id, message) VALUES (?, ?)", (i, message))
+    apply_commit(i, ops)
 
 conn.commit()
 
 n_commits = conn.execute("SELECT COUNT(*) FROM commits").fetchone()[0]
 n_facts = conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
+n_active = conn.execute("SELECT COUNT(*) FROM facts WHERE status='active'").fetchone()[0]
 conn.close()
 
-print(f"Seeded {n_commits} commits and {n_facts} facts into {DB_PATH}.")
-print("PayrollRule still says '3 days' at commit 2 (the contradiction the tests catch).")
+print(f"Seeded {n_commits} commits and {n_facts} facts ({n_active} active at HEAD) into {DB_PATH}.")
+print("Commit 7 introduces the remote-policy change; PayrollRule still says '3 days' there")
+print("(the contradiction the tests catch). Commit 8 fixes it -> tests pass 7/7.")

@@ -20,19 +20,19 @@ DB_PATH = "engram.db"
 TESTS = [
     {
         "id": 1,
-        "name": "Remote work policy reflects the new 5-day rule",
-        "question": "What is the current remote work policy?",
+        "name": "Remote-work policy reflects the new 5-day rule",
+        "question": "How many days per week in-office does the remote work policy require?",
         "expect_contains": "5",
     },
     {
         "id": 2,
-        "name": "Manager approval still required for full remote week",
+        "name": "Manager approval still required for a full remote week",
         "question": "Does working fully remote require any approval?",
         "expect_contains": "manager",
     },
     {
         "id": 3,
-        "name": "Alice Chen is Head of Engineering",
+        "name": "Alice Chen still leads Engineering",
         "question": "What is Alice Chen's role?",
         "expect_contains": "Engineering",
     },
@@ -44,9 +44,21 @@ TESTS = [
     },
     {
         "id": 5,
-        "name": "Payroll bonus rule is consistent with the new in-office policy",
+        "name": "Payroll bonus rule matches the in-office policy",
         "question": "How many days in-office does the payroll rule require for bonus eligibility?",
         "expect_contains": "5",
+    },
+    {
+        "id": 6,
+        "name": "Dana Whitfield is the CEO",
+        "question": "Who is the Chief Executive Officer of Helix Labs?",
+        "expect_contains": "Dana",
+    },
+    {
+        "id": 7,
+        "name": "Atlas is the flagship product",
+        "question": "What is Helix Labs' flagship product?",
+        "expect_contains": "Atlas",
     },
 ]
 
@@ -99,6 +111,25 @@ def init_db():
             conn.execute("ALTER TABLE facts ADD COLUMN superseded_commit_id INTEGER")
         except Exception:
             pass  # column already exists
+
+        # Key/value app state — holds which commit is currently "deployed".
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_state (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        # Default the deployed commit to HEAD if not set yet.
+        head = conn.execute("SELECT MAX(id) FROM commits").fetchone()[0]
+        if head is not None:
+            existing = conn.execute(
+                "SELECT value FROM app_state WHERE key = 'active_commit'"
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO app_state (key, value) VALUES ('active_commit', ?)",
+                    (str(head),),
+                )
         conn.commit()
 
 
@@ -217,7 +248,10 @@ async def _ask_llm(question: str, commit_id: int) -> list[str]:
             "content": (
                 "You are a knowledge base assistant. "
                 "Answer questions based ONLY on the provided company facts. "
-                "Be concise and direct. Quote the relevant fact when possible."
+                "Be concise and direct. Quote the relevant fact when possible. "
+                "Multiple facts about the same subject are complementary parts of one "
+                "picture — do not call them contradictory unless two facts give "
+                "different values for the exact same attribute."
             ),
         },
         {
@@ -253,6 +287,76 @@ async def _ask_llm(question: str, commit_id: int) -> list[str]:
     )
 
 
+async def _ask_llm_batch(questions: list[dict], commit_id: int):
+    """Answer many questions in ONE LLM call (fast).
+
+    `questions` is a list of {"id", "question"}. Returns (answers_by_id, error)
+    where answers_by_id maps id -> answer string. Returns (None, err) on failure
+    so the caller can fall back to one-at-a-time asking.
+    """
+    rows = _facts_at_commit(commit_id)
+    if not rows:
+        return None, "No active facts at that commit."
+
+    facts_text = _facts_text(rows)
+    q_lines = "\n".join(f'{q["id"]}. {q["question"]}' for q in questions)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You answer questions strictly from the provided company facts. "
+                "Multiple facts about the same subject are complementary, not "
+                "contradictory, unless they give different values for the same attribute. "
+                "Return ONLY a JSON array, one object per question, like "
+                '[{"id": 1, "answer": "..."}]. Keep each answer to one sentence.'
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Company facts:\n{facts_text}\n\nQuestions:\n{q_lines}",
+        },
+    ]
+
+    api_key = os.getenv("LLM_API_KEY")
+    primary = os.getenv("LLM_MODEL", "gemini/gemini-2.0-flash")
+    models = [primary] + [m for m in _FALLBACK_MODELS if m != primary]
+
+    for model in models:
+        try:
+            response = await acompletion(model=model, messages=messages, api_key=api_key)
+            text = response.choices[0].message.content or ""
+            parsed = _parse_json_array(text)
+            if parsed is None:
+                return None, "Could not parse batch answer."
+            answers = {int(item["id"]): str(item.get("answer", "")) for item in parsed if "id" in item}
+            return answers, None
+        except Exception as e:  # noqa: BLE001
+            err_str = str(e)
+            if any(x in err_str for x in ("429", "503", "quota", "UNAVAILABLE", "high demand")):
+                continue
+            return None, f"LLM error ({type(e).__name__}): {err_str[:200]}"
+
+    return None, "All models rate-limited."
+
+
+def _parse_json_array(text: str):
+    """Pull a JSON array out of an LLM response, tolerating ```json fences."""
+    import json
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("```", 2)[1] if t.count("```") >= 2 else t
+        if t.lower().startswith("json"):
+            t = t[4:]
+    start, end = t.find("["), t.rfind("]")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        data = json.loads(t[start : end + 1])
+        return data if isinstance(data, list) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -264,11 +368,64 @@ def health():
 
 @app.get("/commits")
 def list_commits():
+    """All commits, each annotated with how many facts it added / superseded."""
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT id, message, created_at FROM commits ORDER BY id"
         ).fetchall()
-    return [dict(r) for r in rows]
+        added = dict(conn.execute(
+            "SELECT commit_id, COUNT(*) FROM facts GROUP BY commit_id"
+        ).fetchall())
+        removed = dict(conn.execute(
+            "SELECT superseded_commit_id, COUNT(*) FROM facts "
+            "WHERE superseded_commit_id IS NOT NULL GROUP BY superseded_commit_id"
+        ).fetchall())
+        active_at = {}
+        for r in rows:
+            cid = r["id"]
+            active_at[cid] = conn.execute(
+                "SELECT COUNT(*) FROM facts WHERE commit_id <= ? "
+                "AND (status='active' OR (status='superseded' AND superseded_commit_id > ?))",
+                (cid, cid),
+            ).fetchone()[0]
+
+    return [
+        {
+            **dict(r),
+            "added": added.get(r["id"], 0),
+            "removed": removed.get(r["id"], 0),
+            "total_facts": active_at.get(r["id"], 0),
+        }
+        for r in rows
+    ]
+
+
+@app.get("/commit/{commit_id}")
+def get_commit(commit_id: int):
+    """One commit plus the exact facts (relationships) it added and superseded."""
+    with get_conn() as conn:
+        meta = conn.execute(
+            "SELECT id, message, created_at FROM commits WHERE id = ?", (commit_id,)
+        ).fetchone()
+        if meta is None:
+            raise HTTPException(status_code=404, detail="No such commit.")
+
+        added = conn.execute(
+            "SELECT subject, predicate, object, source FROM facts "
+            "WHERE commit_id = ? ORDER BY id",
+            (commit_id,),
+        ).fetchall()
+        removed = conn.execute(
+            "SELECT subject, predicate, object, source FROM facts "
+            "WHERE superseded_commit_id = ? ORDER BY id",
+            (commit_id,),
+        ).fetchall()
+
+    return {
+        **dict(meta),
+        "added": [dict(r) for r in added],
+        "removed": [dict(r) for r in removed],
+    }
 
 
 @app.get("/facts")
@@ -285,6 +442,56 @@ def list_facts(commit: int = Query(..., description="Return active facts as of t
             (commit, commit),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Deployment — which commit is "live" (merge = set active) + temporal replay
+# ---------------------------------------------------------------------------
+
+class MergeRequest(BaseModel):
+    commit: int
+
+
+@app.get("/active")
+def get_active():
+    """The commit currently deployed as the AI's live memory."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = 'active_commit'"
+        ).fetchone()
+        head = conn.execute("SELECT MAX(id) FROM commits").fetchone()[0]
+    active = int(row["value"]) if row else (head or 1)
+    return {"active_commit": active, "head": head or 1}
+
+
+@app.post("/merge")
+def merge(body: MergeRequest):
+    """Deploy a commit — set it as the live memory the AI answers from."""
+    with get_conn() as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM commits WHERE id = ?", (body.commit,)
+        ).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="No such commit.")
+        conn.execute(
+            "INSERT INTO app_state (key, value) VALUES ('active_commit', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (str(body.commit),),
+        )
+        conn.commit()
+    return {"active_commit": body.commit}
+
+
+@app.get("/replay")
+async def replay(
+    commit: int = Query(..., description="Answer using only facts active at this commit"),
+    question: str = Query("What is the current remote work policy?"),
+):
+    """Temporal replay: answer a question as the memory stood at a given commit."""
+    answers, err = await _ask_llm(question, commit)
+    if err:
+        return JSONResponse(status_code=503, content={"detail": err})
+    return {"commit": commit, "question": question, "answers": answers}
 
 
 @app.post("/commit", status_code=201)
@@ -440,10 +647,12 @@ def get_impact(commit: int = Query(..., description="Commit to measure impact of
         related = []
         seen_ids = {r["id"] for r in impacted}
         if key_terms:
+            # Match whole numbers only, so "3" doesn't spuriously hit "31".
+            term_patterns = [re.compile(rf"\b{re.escape(t)}\b") for t in key_terms]
             for row in keyword_hits:
                 if row["id"] not in seen_ids:
                     obj_text = row["object"].lower()
-                    if any(term in obj_text for term in key_terms):
+                    if any(p.search(obj_text) for p in term_patterns):
                         related.append(dict(row))
                         seen_ids.add(row["id"])
 
@@ -547,30 +756,33 @@ def get_tests():
 
 @app.post("/tests/run")
 async def run_tests(commit: int = Query(...)):
+    # Fast path: answer every test question in a single LLM call.
+    answers_by_id, err = await _ask_llm_batch(TESTS, commit)
+
+    # Fallback: if the batch call failed or couldn't be parsed, ask one by one.
+    if err or answers_by_id is None:
+        answers_by_id = {}
+        for test in TESTS:
+            ans, e2 = await _ask_llm(test["question"], commit)
+            if e2:
+                return JSONResponse(status_code=503, content={"detail": e2})
+            answers_by_id[test["id"]] = " ".join(ans)
 
     passed = 0
     failed = 0
     results = []
-
     for test in TESTS:
-        answers, err = await _ask_llm(test["question"], commit)
-        if err:
-            return JSONResponse(status_code=503, content={"detail": err})
-        answer_text = " ".join(answers).lower()
-        ok = test["expect_contains"].lower() in answer_text
-
-        if ok:
-            passed += 1
-        else:
-            failed += 1
-
+        answer = answers_by_id.get(test["id"], "")
+        ok = test["expect_contains"].lower() in answer.lower()
+        passed += 1 if ok else 0
+        failed += 0 if ok else 1
         results.append({
             "id": test["id"],
             "name": test["name"],
             "question": test["question"],
             "expect_contains": test["expect_contains"],
             "passed": ok,
-            "answer": answers,
+            "answer": [answer],
         })
 
     return {
