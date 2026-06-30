@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { RelationshipLine, type Triple } from "../components/Relationship";
 
-const API = "http://localhost:8000";
+import { API } from "../config";
 
 interface Commit {
   id: number;

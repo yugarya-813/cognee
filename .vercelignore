@@ -1,0 +1,15 @@
+# Backend (Python) deploy should not upload the frontend, the venv, or scratch.
+venv/
+frontend/
+node_modules/
+__pycache__/
+*.pyc
+*.log
+*.mp4
+*.db
+.cognee/
+.git/
+Screen Recording*.mp4
+backend*.log
+frontend.txt
+1.png

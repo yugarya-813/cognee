@@ -28,34 +28,6 @@ import sqlite3
 
 DB_PATH = "engram.db"
 
-# Start from a clean database so the demo is identical every time.
-if os.path.exists(DB_PATH):
-    os.remove(DB_PATH)
-
-conn = sqlite3.connect(DB_PATH)
-
-conn.execute("""
-    CREATE TABLE commits (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        message    TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-""")
-conn.execute("""
-    CREATE TABLE facts (
-        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-        subject              TEXT NOT NULL,
-        predicate            TEXT NOT NULL,
-        object               TEXT NOT NULL,
-        source               TEXT,
-        commit_id            INTEGER NOT NULL,
-        status               TEXT NOT NULL DEFAULT 'active',
-        superseded_commit_id INTEGER,
-        created_at           TEXT NOT NULL DEFAULT (datetime('now')),
-        FOREIGN KEY (commit_id) REFERENCES commits(id)
-    )
-""")
-
 # ---------------------------------------------------------------------------
 # The history. Each commit is (message, [operations]).
 #   ("add",       subject, predicate, object, source)
@@ -126,7 +98,7 @@ COMMITS = [
 ]
 
 
-def apply_commit(commit_id: int, ops: list) -> None:
+def _apply_commit(conn, commit_id: int, ops: list) -> None:
     for op in ops:
         kind = op[0]
         if kind == "add":
@@ -149,17 +121,50 @@ def apply_commit(commit_id: int, ops: list) -> None:
             raise ValueError(f"Unknown op: {kind}")
 
 
-for i, (message, ops) in enumerate(COMMITS, start=1):
-    conn.execute("INSERT INTO commits (id, message) VALUES (?, ?)", (i, message))
-    apply_commit(i, ops)
+def build(db_path: str = DB_PATH) -> dict:
+    """Create a fresh database at db_path and seed the full commit history.
+    Safe to call at runtime (e.g. on a serverless cold start)."""
+    if os.path.exists(db_path):
+        os.remove(db_path)
 
-conn.commit()
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE commits (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            message    TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE facts (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject              TEXT NOT NULL,
+            predicate            TEXT NOT NULL,
+            object               TEXT NOT NULL,
+            source               TEXT,
+            commit_id            INTEGER NOT NULL,
+            status               TEXT NOT NULL DEFAULT 'active',
+            superseded_commit_id INTEGER,
+            created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (commit_id) REFERENCES commits(id)
+        )
+    """)
 
-n_commits = conn.execute("SELECT COUNT(*) FROM commits").fetchone()[0]
-n_facts = conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
-n_active = conn.execute("SELECT COUNT(*) FROM facts WHERE status='active'").fetchone()[0]
-conn.close()
+    for i, (message, ops) in enumerate(COMMITS, start=1):
+        conn.execute("INSERT INTO commits (id, message) VALUES (?, ?)", (i, message))
+        _apply_commit(conn, i, ops)
 
-print(f"Seeded {n_commits} commits and {n_facts} facts ({n_active} active at HEAD) into {DB_PATH}.")
-print("Commit 7 introduces the remote-policy change; PayrollRule still says '3 days' there")
-print("(the contradiction the tests catch). Commit 8 fixes it -> tests pass 7/7.")
+    conn.commit()
+    n_commits = conn.execute("SELECT COUNT(*) FROM commits").fetchone()[0]
+    n_facts = conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
+    n_active = conn.execute("SELECT COUNT(*) FROM facts WHERE status='active'").fetchone()[0]
+    conn.close()
+    return {"commits": n_commits, "facts": n_facts, "active": n_active}
+
+
+if __name__ == "__main__":
+    stats = build(DB_PATH)
+    print(f"Seeded {stats['commits']} commits and {stats['facts']} facts "
+          f"({stats['active']} active at HEAD) into {DB_PATH}.")
+    print("Commit 7 introduces the remote-policy change; PayrollRule still says '3 days' there")
+    print("(the contradiction the tests catch). Commit 8 fixes it -> tests pass 7/7.")

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
-const API = "http://localhost:8000";
+import { API } from "../config";
 
 interface Fact {
   id: number;

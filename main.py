@@ -11,7 +11,9 @@ from pydantic import BaseModel
 
 load_dotenv()
 
-DB_PATH = "engram.db"
+# On Vercel the project files are read-only; only /tmp is writable. Use it there
+# (the DB is auto-seeded on cold start). Locally we use a file in the project.
+DB_PATH = "/tmp/engram.db" if os.getenv("VERCEL") else "engram.db"
 
 # ---------------------------------------------------------------------------
 # Memory tests — 5 tests, 4 should pass at commit 2, 1 should fail
@@ -133,9 +135,44 @@ def init_db():
         conn.commit()
 
 
+def _ensure_seeded():
+    """Seed the database if it is missing or empty. Never wipes existing data."""
+    need = not os.path.exists(DB_PATH)
+    if not need:
+        try:
+            with get_conn() as conn:
+                need = conn.execute("SELECT COUNT(*) FROM commits").fetchone()[0] == 0
+        except Exception:  # noqa: BLE001 — table missing / corrupt
+            need = True
+    if need:
+        import seed
+        seed.build(DB_PATH)
+
+
+_db_ready = False
+
+
+def _ensure_db():
+    """Make sure the DB exists, is seeded, and migrated. Runs once per process."""
+    global _db_ready
+    if _db_ready:
+        return
+    _ensure_seeded()
+    init_db()
+    _db_ready = True
+
+
 @app.on_event("startup")
 def startup():
-    init_db()
+    _ensure_db()
+
+
+@app.middleware("http")
+async def _db_guard(request, call_next):
+    # Serverless cold starts don't always run the startup event — guarantee the
+    # database is ready before any request touches it.
+    _ensure_db()
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------

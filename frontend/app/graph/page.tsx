@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-const API = "http://localhost:8000";
+import { API } from "../config";
 
 interface Commit {
   id: number;

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { RelationshipLine } from "../components/Relationship";
 
-const API = "http://localhost:8000";
+import { API } from "../config";
 
 interface Commit {
   id: number;
