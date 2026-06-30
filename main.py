@@ -160,6 +160,10 @@ class AskRequest(BaseModel):
     commit: int
 
 
+class CompareRequest(BaseModel):
+    question: str
+
+
 # ---------------------------------------------------------------------------
 # Cognee helpers
 # ---------------------------------------------------------------------------
@@ -179,6 +183,28 @@ def _facts_at_commit(commit_id: int) -> list[sqlite3.Row]:
 
 def _facts_text(rows) -> str:
     """Render fact rows as plain sentences — the input we feed Cognee."""
+    return "\n".join(
+        f"- {r['subject']} {r['predicate']} {r['object']}." for r in rows
+    )
+
+
+def _active_commit() -> int:
+    """The commit currently deployed as the live memory (defaults to HEAD)."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = 'active_commit'"
+        ).fetchone()
+        head = conn.execute("SELECT MAX(id) FROM commits").fetchone()[0]
+    return int(row["value"]) if row else (head or 1)
+
+
+def _all_facts_text() -> str:
+    """EVERY fact from EVERY commit, including superseded/outdated ones, with no
+    version markers — the naive "dump everything into the prompt" memory."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT subject, predicate, object FROM facts ORDER BY commit_id, id"
+        ).fetchall()
     return "\n".join(
         f"- {r['subject']} {r['predicate']} {r['object']}." for r in rows
     )
@@ -234,6 +260,34 @@ _FALLBACK_MODELS = [
     "gemini/gemini-2.5-flash",
 ]
 
+
+async def _complete(messages: list[dict]):
+    """Run one chat completion, trying models in order if rate-limited.
+    Returns (text, error_string). Exactly one of the two is non-None."""
+    api_key = os.getenv("LLM_API_KEY")
+    primary = os.getenv("LLM_MODEL", "gemini/gemini-2.0-flash")
+    models = [primary] + [m for m in _FALLBACK_MODELS if m != primary]
+
+    last_err = None
+    for model in models:
+        try:
+            response = await acompletion(model=model, messages=messages, api_key=api_key)
+            return response.choices[0].message.content, None
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            err_str = str(e)
+            if any(x in err_str for x in ("429", "503", "quota", "UNAVAILABLE", "high demand")):
+                continue
+            if any(x in type(e).__name__ for x in ("RateLimit", "ServiceUnavailable")):
+                continue
+            return None, f"LLM error ({type(e).__name__}): {err_str[:300]}"
+
+    return None, (
+        "All Gemini models are currently unavailable (rate-limited or high demand). "
+        "Wait a minute and try again. "
+        f"Last error: {str(last_err)[:200]}"
+    )
+
 async def _ask_llm(question: str, commit_id: int) -> list[str]:
     """Ask a question by passing all active facts as context in a single LLM call.
     Tries multiple models in order if one is rate-limited."""
@@ -260,31 +314,10 @@ async def _ask_llm(question: str, commit_id: int) -> list[str]:
         },
     ]
 
-    api_key = os.getenv("LLM_API_KEY")
-    primary = os.getenv("LLM_MODEL", "gemini/gemini-2.0-flash")
-    models = [primary] + [m for m in _FALLBACK_MODELS if m != primary]
-
-    last_err = None
-    for model in models:
-        try:
-            response = await acompletion(model=model, messages=messages, api_key=api_key)
-            return [response.choices[0].message.content], None
-        except Exception as e:
-            last_err = e
-            err_str = str(e)
-            # Retry on rate limits and temporary unavailability
-            if any(x in err_str for x in ("429", "503", "quota", "UNAVAILABLE", "high demand")):
-                continue
-            if any(x in type(e).__name__ for x in ("RateLimit", "ServiceUnavailable")):
-                continue
-            # Hard error — surface it
-            return None, f"LLM error ({type(e).__name__}): {err_str[:300]}"
-
-    return None, (
-        "All Gemini models are currently unavailable (rate-limited or high demand). "
-        "Wait a minute and try again. "
-        f"Last error: {str(last_err)[:200]}"
-    )
+    text, err = await _complete(messages)
+    if err:
+        return None, err
+    return [text], None
 
 
 async def _ask_llm_batch(questions: list[dict], commit_id: int):
@@ -746,6 +779,98 @@ async def ask(body: AskRequest):
 
 
 # ---------------------------------------------------------------------------
+# Three-way comparison demo
+#   Tier 1 (no memory):      LLM with NO facts.
+#   Tier 2 (generic memory): LLM with EVERY fact ever stored, stale ones
+#                            included, no version awareness.
+#   Tier 3 (Engram):         LLM with ONLY the facts active at the DEPLOYED
+#                            commit — the real product behaviour.
+# These use genuinely different context construction; nothing is faked.
+# ---------------------------------------------------------------------------
+
+async def _compare_no_memory(question: str):
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a general AI assistant with no access to any company's "
+                "internal records, policies, or people. Answer the user's question. "
+                "If it asks about a specific organisation's internal data that you "
+                "cannot possibly know, say clearly that you don't have that information."
+            ),
+        },
+        {"role": "user", "content": question},
+    ]
+    text, err = await _complete(messages)
+    return text, err
+
+
+async def _compare_generic(question: str):
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are an AI assistant answering from a memory store. The store has "
+                "no timestamps and no versioning, so it treats EVERY stored fact as "
+                "currently true — it has no way to know any fact was later changed or "
+                "superseded. Answer the question using all of the facts below as if "
+                "each one is current. Do not assume newer-sounding facts override older "
+                "ones; you cannot tell them apart."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Stored facts (all considered current):\n{_all_facts_text()}\n\nQuestion: {question}",
+        },
+    ]
+    text, err = await _complete(messages)
+    return text, err
+
+
+@app.post("/compare/no-memory")
+async def compare_no_memory(body: CompareRequest):
+    """Tier 1 — stateless: the LLM gets the question with no facts at all."""
+    text, err = await _compare_no_memory(body.question)
+    if err:
+        return JSONResponse(status_code=503, content={"detail": err})
+    return {"tier": "no_memory", "question": body.question, "answer": text}
+
+
+@app.post("/compare/generic")
+async def compare_generic(body: CompareRequest):
+    """Tier 2 — naive RAG/Mem0 style: every fact ever stored, stale included."""
+    text, err = await _compare_generic(body.question)
+    if err:
+        return JSONResponse(status_code=503, content={"detail": err})
+    return {"tier": "generic", "question": body.question, "answer": text}
+
+
+@app.post("/compare/engram")
+async def compare_engram(body: CompareRequest):
+    """Tier 3 — Engram: only facts active at the deployed commit, plus the test
+    status for that commit so the answer is verifiable."""
+    deployed = _active_commit()
+    answers, err = await _ask_llm(body.question, deployed)
+    if err:
+        return JSONResponse(status_code=503, content={"detail": err})
+
+    tests = _cached_tests(deployed)
+    if tests is None:
+        suite = await _run_test_suite(deployed)
+        if "error" not in suite:
+            tests = {"passed": suite["passed"], "total": suite["total"]}
+
+    return {
+        "tier": "engram",
+        "question": body.question,
+        "answer": answers[0] if answers else "",
+        "deployed_commit": deployed,
+        "tests_passed": tests["passed"] if tests else None,
+        "tests_total": tests["total"] if tests else None,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Test endpoints
 # ---------------------------------------------------------------------------
 
@@ -754,28 +879,51 @@ def get_tests():
     return TESTS
 
 
-@app.post("/tests/run")
-async def run_tests(commit: int = Query(...)):
-    # Fast path: answer every test question in a single LLM call.
-    answers_by_id, err = await _ask_llm_batch(TESTS, commit)
+def _cached_tests(commit: int):
+    """Read a previously-stored test result for a commit (facts at a commit
+    never change, so a cached pass/fail count stays valid)."""
+    import json
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = ?", (f"tests:{commit}",)
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["value"])
+    except Exception:  # noqa: BLE001
+        return None
 
-    # Fallback: if the batch call failed or couldn't be parsed, ask one by one.
+
+def _cache_tests(commit: int, passed: int, total: int):
+    import json
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO app_state (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (f"tests:{commit}", json.dumps({"passed": passed, "total": total})),
+        )
+        conn.commit()
+
+
+async def _run_test_suite(commit: int):
+    """Run all memory tests at a commit (one batched LLM call, sequential
+    fallback). Returns the result dict, or {"error": ...} on LLM failure."""
+    answers_by_id, err = await _ask_llm_batch(TESTS, commit)
     if err or answers_by_id is None:
         answers_by_id = {}
         for test in TESTS:
             ans, e2 = await _ask_llm(test["question"], commit)
             if e2:
-                return JSONResponse(status_code=503, content={"detail": e2})
+                return {"error": e2}
             answers_by_id[test["id"]] = " ".join(ans)
 
     passed = 0
-    failed = 0
     results = []
     for test in TESTS:
         answer = answers_by_id.get(test["id"], "")
         ok = test["expect_contains"].lower() in answer.lower()
         passed += 1 if ok else 0
-        failed += 0 if ok else 1
         results.append({
             "id": test["id"],
             "name": test["name"],
@@ -785,10 +933,20 @@ async def run_tests(commit: int = Query(...)):
             "answer": [answer],
         })
 
+    total = len(TESTS)
+    _cache_tests(commit, passed, total)
     return {
         "commit": commit,
         "passed": passed,
-        "failed": failed,
-        "total": len(TESTS),
+        "failed": total - passed,
+        "total": total,
         "results": results,
     }
+
+
+@app.post("/tests/run")
+async def run_tests(commit: int = Query(...)):
+    result = await _run_test_suite(commit)
+    if "error" in result:
+        return JSONResponse(status_code=503, content={"detail": result["error"]})
+    return result
