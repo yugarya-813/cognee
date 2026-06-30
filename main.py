@@ -1,10 +1,54 @@
 import sqlite3
+import re
+import os
 import cognee
+from dotenv import load_dotenv
+from litellm import acompletion
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+load_dotenv()
+
 DB_PATH = "engram.db"
+
+# ---------------------------------------------------------------------------
+# Memory tests — 5 tests, 4 should pass at commit 2, 1 should fail
+# (the PayrollRule contradiction)
+# ---------------------------------------------------------------------------
+TESTS = [
+    {
+        "id": 1,
+        "name": "Remote work policy reflects the new 5-day rule",
+        "question": "What is the current remote work policy?",
+        "expect_contains": "5",
+    },
+    {
+        "id": 2,
+        "name": "Manager approval still required for full remote week",
+        "question": "Does working fully remote require any approval?",
+        "expect_contains": "manager",
+    },
+    {
+        "id": 3,
+        "name": "Alice Chen is Head of Engineering",
+        "question": "What is Alice Chen's role?",
+        "expect_contains": "Engineering",
+    },
+    {
+        "id": 4,
+        "name": "Engineering headcount is 42",
+        "question": "How many employees are in the Engineering department?",
+        "expect_contains": "42",
+    },
+    {
+        "id": 5,
+        "name": "Payroll bonus rule is consistent with the new in-office policy",
+        "question": "How many days in-office does the payroll rule require for bonus eligibility?",
+        "expect_contains": "5",
+    },
+]
 
 app = FastAPI(title="Engram API", version="0.1.0")
 
@@ -15,8 +59,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Tracks which commit is currently loaded in Cognee so we only re-ingest when needed
-_cognee_loaded_commit: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -40,17 +82,23 @@ def init_db():
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS facts (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                subject    TEXT NOT NULL,
-                predicate  TEXT NOT NULL,
-                object     TEXT NOT NULL,
-                source     TEXT,
-                commit_id  INTEGER NOT NULL,
-                status     TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject              TEXT NOT NULL,
+                predicate            TEXT NOT NULL,
+                object               TEXT NOT NULL,
+                source               TEXT,
+                commit_id            INTEGER NOT NULL,
+                status               TEXT NOT NULL DEFAULT 'active',
+                superseded_commit_id INTEGER,
+                created_at           TEXT NOT NULL DEFAULT (datetime('now')),
                 FOREIGN KEY (commit_id) REFERENCES commits(id)
             )
         """)
+        # Safe migration: add superseded_commit_id to existing DBs
+        try:
+            conn.execute("ALTER TABLE facts ADD COLUMN superseded_commit_id INTEGER")
+        except Exception:
+            pass  # column already exists
         conn.commit()
 
 
@@ -91,29 +139,69 @@ def _facts_at_commit(commit_id: int) -> list[sqlite3.Row]:
             """
             SELECT subject, predicate, object
             FROM facts
-            WHERE commit_id <= ? AND status = 'active'
+            WHERE commit_id <= ? AND (status = 'active' OR superseded_commit_id > ?)
             ORDER BY id
             """,
-            (commit_id,),
+            (commit_id, commit_id),
         ).fetchall()
 
 
-async def _load_cognee(commit_id: int):
-    global _cognee_loaded_commit
-    if _cognee_loaded_commit == commit_id:
-        return  # already loaded
+_FALLBACK_MODELS = [
+    "gemini/gemini-2.5-flash-lite",
+    "gemini/gemini-2.0-flash",
+    "gemini/gemini-2.5-flash",
+]
 
+async def _ask_llm(question: str, commit_id: int) -> list[str]:
+    """Ask a question by passing all active facts as context in a single LLM call.
+    Tries multiple models in order if one is rate-limited."""
     rows = _facts_at_commit(commit_id)
     if not rows:
         raise HTTPException(status_code=400, detail="No active facts at that commit.")
 
-    text = "\n".join(f"{r['subject']} {r['predicate']} {r['object']}." for r in rows)
+    facts_text = "\n".join(
+        f"- {r['subject']} {r['predicate']} {r['object']}." for r in rows
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a knowledge base assistant. "
+                "Answer questions based ONLY on the provided company facts. "
+                "Be concise and direct. Quote the relevant fact when possible."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Company facts:\n{facts_text}\n\nQuestion: {question}",
+        },
+    ]
 
-    await cognee.prune.prune_data()
-    await cognee.prune.prune_system(metadata=True)
-    await cognee.add(text)
-    await cognee.cognify()
-    _cognee_loaded_commit = commit_id
+    api_key = os.getenv("LLM_API_KEY")
+    primary = os.getenv("LLM_MODEL", "gemini/gemini-2.0-flash")
+    models = [primary] + [m for m in _FALLBACK_MODELS if m != primary]
+
+    last_err = None
+    for model in models:
+        try:
+            response = await acompletion(model=model, messages=messages, api_key=api_key)
+            return [response.choices[0].message.content], None
+        except Exception as e:
+            last_err = e
+            err_str = str(e)
+            # Retry on rate limits and temporary unavailability
+            if any(x in err_str for x in ("429", "503", "quota", "UNAVAILABLE", "high demand")):
+                continue
+            if any(x in type(e).__name__ for x in ("RateLimit", "ServiceUnavailable")):
+                continue
+            # Hard error — surface it
+            return None, f"LLM error ({type(e).__name__}): {err_str[:300]}"
+
+    return None, (
+        "All Gemini models are currently unavailable (rate-limited or high demand). "
+        "Wait a minute and try again. "
+        f"Last error: {str(last_err)[:200]}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -141,10 +229,11 @@ def list_facts(commit: int = Query(..., description="Return active facts as of t
             """
             SELECT id, subject, predicate, object, source, commit_id, status, created_at
             FROM facts
-            WHERE commit_id <= ? AND status = 'active'
+            WHERE commit_id <= ?
+              AND (status = 'active' OR (status = 'superseded' AND superseded_commit_id > ?))
             ORDER BY id
             """,
-            (commit,),
+            (commit, commit),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -173,18 +262,15 @@ def create_commit(body: CommitRequest):
             elif change.op == "remove":
                 conn.execute(
                     """
-                    UPDATE facts SET status = 'superseded'
+                    UPDATE facts SET status = 'superseded', superseded_commit_id = ?
                     WHERE subject = ? AND predicate = ? AND object = ? AND status = 'active'
                     """,
-                    (change.subject, change.predicate, change.object),
+                    (new_commit_id, change.subject, change.predicate, change.object),
                 )
             else:
                 raise HTTPException(status_code=400, detail=f"Unknown op '{change.op}'.")
 
         conn.commit()
-
-    global _cognee_loaded_commit
-    _cognee_loaded_commit = None  # invalidate cache so next /ask re-ingests
 
     return {"commit_id": new_commit_id}
 
@@ -198,58 +284,188 @@ def diff_commits(
         raise HTTPException(status_code=400, detail="'from' must be less than 'to'")
 
     with get_conn() as conn:
+        # Facts added in commits (from, to]
         added = conn.execute(
             """
-            SELECT subject, predicate, object FROM facts
+            SELECT subject, predicate, object, source
+            FROM facts
             WHERE commit_id > ? AND commit_id <= ?
-              AND status IN ('active', 'superseded')
             ORDER BY id
             """,
             (from_commit, to_commit),
         ).fetchall()
 
+        # Facts superseded in commits (from, to]
         removed = conn.execute(
             """
-            SELECT subject, predicate, object FROM facts
-            WHERE commit_id <= ? AND status = 'superseded'
+            SELECT subject, predicate, object, source
+            FROM facts
+            WHERE superseded_commit_id > ? AND superseded_commit_id <= ?
             ORDER BY id
             """,
-            (from_commit,),
+            (from_commit, to_commit),
         ).fetchall()
 
     result = []
-    for r in added:
-        result.append({"op": "added", **dict(r)})
     for r in removed:
         result.append({"op": "removed", **dict(r)})
+    for r in added:
+        result.append({"op": "added", **dict(r)})
     return result
+
+
+@app.get("/impact")
+def get_impact(commit: int = Query(..., description="Commit to measure impact of")):
+    """Return facts at this commit whose content overlaps with what changed."""
+    with get_conn() as conn:
+        prev = commit - 1
+
+        # Find subjects that changed in this commit (added or removed)
+        changed_subjects = set()
+
+        added_rows = conn.execute(
+            "SELECT DISTINCT subject FROM facts WHERE commit_id = ?",
+            (commit,),
+        ).fetchall()
+        for r in added_rows:
+            changed_subjects.add(r["subject"])
+
+        removed_rows = conn.execute(
+            "SELECT DISTINCT subject FROM facts WHERE superseded_commit_id = ?",
+            (commit,),
+        ).fetchall()
+        for r in removed_rows:
+            changed_subjects.add(r["subject"])
+
+        if not changed_subjects:
+            return {"commit": commit, "changed_subjects": [], "impacted_facts": [], "count": 0}
+
+        # Find active facts at prev commit that mention any changed subject
+        # (in subject, predicate, or object field)
+        placeholders = ",".join("?" * len(changed_subjects))
+        subjects_list = list(changed_subjects)
+
+        impacted = conn.execute(
+            f"""
+            SELECT id, subject, predicate, object, source
+            FROM facts
+            WHERE commit_id <= ?
+              AND (status = 'active' OR (status = 'superseded' AND superseded_commit_id > ?))
+              AND (
+                subject IN ({placeholders})
+                OR object LIKE '%' || ? || '%'
+              )
+            ORDER BY id
+            """,
+            [prev, prev] + subjects_list + [subjects_list[0]],
+        ).fetchall()
+
+        # Broader text search: facts whose object text mentions keywords from changed subjects
+        keyword_hits = conn.execute(
+            """
+            SELECT id, subject, predicate, object, source
+            FROM facts
+            WHERE commit_id <= ?
+              AND (status = 'active' OR (status = 'superseded' AND superseded_commit_id > ?))
+            ORDER BY id
+            """,
+            (prev, prev),
+        ).fetchall()
+
+        # Filter to facts whose object contains any number from changed facts' objects
+        changed_objects = conn.execute(
+            """
+            SELECT DISTINCT object FROM facts
+            WHERE commit_id = ?
+               OR superseded_commit_id = ?
+            """,
+            (commit, commit),
+        ).fetchall()
+
+        # Extract key terms (numbers, policy-related words) from changed objects
+        key_terms = set()
+        for row in changed_objects:
+            nums = re.findall(r'\d+', row["object"])
+            key_terms.update(nums)
+
+        related = []
+        seen_ids = {r["id"] for r in impacted}
+        if key_terms:
+            for row in keyword_hits:
+                if row["id"] not in seen_ids:
+                    obj_text = row["object"].lower()
+                    if any(term in obj_text for term in key_terms):
+                        related.append(dict(row))
+                        seen_ids.add(row["id"])
+
+        all_impacted = [dict(r) for r in impacted] + related
+
+    return {
+        "commit": commit,
+        "changed_subjects": list(changed_subjects),
+        "impacted_facts": all_impacted,
+        "count": len(all_impacted),
+    }
 
 
 @app.post("/ingest")
 async def ingest():
-    """Load ALL current active facts into Cognee (convenience endpoint)."""
+    """No-op kept for API compatibility — ask now uses direct LLM calls."""
     with get_conn() as conn:
         max_commit = conn.execute("SELECT MAX(id) FROM commits").fetchone()[0] or 1
-    await _load_cognee(max_commit)
     rows = _facts_at_commit(max_commit)
-    return {"status": "ingested", "facts_loaded": len(rows), "at_commit": max_commit}
+    return {"status": "ready", "facts_loaded": len(rows), "at_commit": max_commit}
 
 
 @app.post("/ask")
 async def ask(body: AskRequest):
-    """Ask a natural language question about memory at a specific commit."""
-    await _load_cognee(body.commit)
-
-    results = await cognee.search(body.question)
-
-    answers = []
-    for r in results:
-        raw = r if isinstance(r, dict) else (r.__dict__ if hasattr(r, "__dict__") else {})
-        for item in raw.get("search_result", []):
-            if isinstance(item, dict):
-                text = item.get("text") or item.get("content") or item.get("name") or str(item)
-                answers.append(text)
-            else:
-                answers.append(str(item))
-
+    answers, err = await _ask_llm(body.question, body.commit)
+    if err:
+        return JSONResponse(status_code=503, content={"detail": err})
     return {"question": body.question, "commit": body.commit, "answers": answers}
+
+
+# ---------------------------------------------------------------------------
+# Test endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/tests")
+def get_tests():
+    return TESTS
+
+
+@app.post("/tests/run")
+async def run_tests(commit: int = Query(...)):
+
+    passed = 0
+    failed = 0
+    results = []
+
+    for test in TESTS:
+        answers, err = await _ask_llm(test["question"], commit)
+        if err:
+            return JSONResponse(status_code=503, content={"detail": err})
+        answer_text = " ".join(answers).lower()
+        ok = test["expect_contains"].lower() in answer_text
+
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+
+        results.append({
+            "id": test["id"],
+            "name": test["name"],
+            "question": test["question"],
+            "expect_contains": test["expect_contains"],
+            "passed": ok,
+            "answer": answers,
+        })
+
+    return {
+        "commit": commit,
+        "passed": passed,
+        "failed": failed,
+        "total": len(TESTS),
+        "results": results,
+    }
