@@ -1,7 +1,7 @@
 import sqlite3
 import re
 import os
-import cognee
+import cognee_engine
 from dotenv import load_dotenv
 from litellm import acompletion
 from fastapi import FastAPI, Query, HTTPException
@@ -146,6 +146,57 @@ def _facts_at_commit(commit_id: int) -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def _facts_text(rows) -> str:
+    """Render fact rows as plain sentences — the input we feed Cognee."""
+    return "\n".join(
+        f"- {r['subject']} {r['predicate']} {r['object']}." for r in rows
+    )
+
+
+def _build_graph(commit_id: int) -> dict:
+    """Turn the active facts at a commit into a node/relationship graph.
+
+    Each fact triple (subject -predicate-> object) becomes two nodes and one
+    edge. Nodes/edges touched by a fact ADDED at this commit are flagged
+    `changed` so the UI can highlight what just moved.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, subject, predicate, object, source, commit_id, status
+            FROM facts
+            WHERE commit_id <= ?
+              AND (status = 'active' OR (status = 'superseded' AND superseded_commit_id > ?))
+            ORDER BY id
+            """,
+            (commit_id, commit_id),
+        ).fetchall()
+
+    nodes: dict[str, dict] = {}
+    edges: list[dict] = []
+
+    def add_node(name: str, kind: str, changed: bool):
+        existing = nodes.get(name)
+        if existing is None:
+            nodes[name] = {"id": name, "label": name, "kind": kind, "changed": changed}
+        elif changed:
+            existing["changed"] = True
+
+    for r in rows:
+        is_new = r["commit_id"] == commit_id
+        add_node(r["subject"], "entity", is_new)
+        add_node(r["object"], "value", is_new)
+        edges.append({
+            "source": r["subject"],
+            "target": r["object"],
+            "label": r["predicate"],
+            "source_ref": r["source"],
+            "changed": is_new,
+        })
+
+    return {"commit": commit_id, "nodes": list(nodes.values()), "edges": edges}
+
+
 _FALLBACK_MODELS = [
     "gemini/gemini-2.5-flash-lite",
     "gemini/gemini-2.0-flash",
@@ -159,9 +210,7 @@ async def _ask_llm(question: str, commit_id: int) -> list[str]:
     if not rows:
         raise HTTPException(status_code=400, detail="No active facts at that commit.")
 
-    facts_text = "\n".join(
-        f"- {r['subject']} {r['predicate']} {r['object']}." for r in rows
-    )
+    facts_text = _facts_text(rows)
     messages = [
         {
             "role": "system",
@@ -406,6 +455,68 @@ def get_impact(commit: int = Query(..., description="Commit to measure impact of
         "impacted_facts": all_impacted,
         "count": len(all_impacted),
     }
+
+
+# ---------------------------------------------------------------------------
+# Knowledge graph — nodes & relationships (the "vector-ish" memory view)
+# ---------------------------------------------------------------------------
+
+@app.get("/graph")
+def get_graph(commit: int = Query(..., description="Build the graph from active facts at this commit")):
+    """Node/relationship view of the memory at a commit, straight from SQLite.
+
+    Always available (no LLM/quota needed) so the graph renders instantly. For
+    the richer Cognee-built graph use the /cognee/* endpoints below.
+    """
+    return _build_graph(commit)
+
+
+# ---------------------------------------------------------------------------
+# Cognee — the intelligence layer (vector + knowledge-graph memory)
+# ---------------------------------------------------------------------------
+
+class CogneeBuildRequest(BaseModel):
+    commit: int
+
+
+@app.get("/cognee/status")
+def cognee_status():
+    return cognee_engine.status()
+
+
+@app.post("/cognee/build")
+async def cognee_build(body: CogneeBuildRequest):
+    """Feed the active facts at a commit into Cognee and build its graph."""
+    rows = _facts_at_commit(body.commit)
+    if not rows:
+        raise HTTPException(status_code=400, detail="No active facts at that commit.")
+    result = await cognee_engine.build_memory(_facts_text(rows), body.commit)
+    if not result["ok"]:
+        return JSONResponse(status_code=503, content={"detail": result["message"]})
+    return result
+
+
+@app.get("/cognee/graph")
+async def cognee_graph():
+    """Return the knowledge graph Cognee currently holds (after a build)."""
+    result = await cognee_engine.graph()
+    if not result["ok"]:
+        return JSONResponse(status_code=503, content={"detail": result["message"]})
+    return {"nodes": result["nodes"], "edges": result["edges"]}
+
+
+@app.post("/cognee/ask")
+async def cognee_ask(body: AskRequest):
+    """Ask Cognee using graph-aware retrieval, falling back to a direct LLM
+    call over the same facts if Cognee is unavailable."""
+    answer, err = await cognee_engine.ask(body.question)
+    if err:
+        # Graceful fallback so the demo never dead-ends.
+        answers, llm_err = await _ask_llm(body.question, body.commit)
+        if llm_err:
+            return JSONResponse(status_code=503, content={"detail": f"{err} | Fallback: {llm_err}"})
+        return {"question": body.question, "commit": body.commit, "answers": answers, "engine": "llm-fallback"}
+    return {"question": body.question, "commit": body.commit, "answers": [answer], "engine": "cognee"}
 
 
 @app.post("/ingest")

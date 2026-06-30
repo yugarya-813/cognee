@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 
 const NAV = [
   { href: "/facts",   label: "Facts",   icon: <FactsIcon /> },
+  { href: "/graph",   label: "Graph",   icon: <GraphIcon /> },
   { href: "/commits", label: "Commits", icon: <CommitsIcon /> },
   { href: "/changes", label: "Changes", icon: <ChangesIcon /> },
   { href: "/tests",   label: "Tests",   icon: <TestsIcon /> },
@@ -71,6 +72,17 @@ function FactsIcon() {
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
       <rect x="1.5" y="1.5" width="11" height="11" rx="2.5" stroke="currentColor" strokeWidth="1.4"/>
       <path d="M4 5h6M4 7.5h6M4 10h3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
+function GraphIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <circle cx="3" cy="3.5" r="1.8" stroke="currentColor" strokeWidth="1.3"/>
+      <circle cx="11" cy="4" r="1.8" stroke="currentColor" strokeWidth="1.3"/>
+      <circle cx="6.5" cy="11" r="1.8" stroke="currentColor" strokeWidth="1.3"/>
+      <path d="M4.5 4.5l4.5 4.5M9.5 5l-4 4.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
     </svg>
   );
 }

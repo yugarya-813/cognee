@@ -25,3 +25,12 @@ Thumbs.db
 # Misc
 .agents/
 skills-lock.json
+
+# Local logs, scratch dumps and screen recordings — not source
+*.log
+*.mp4
+frontend.txt
+
+# Cognee local memory store (generated)
+.cognee/
+.cognee_system/
