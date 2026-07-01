@@ -54,6 +54,41 @@ async def build_memory(facts_text: str, commit_id: int) -> dict:
         }
 
 
+async def extract(text: str) -> tuple[list[str] | None, str | None]:
+    """Run Cognee's extraction over a raw document.
+
+    We add the document text and cognify it, letting Cognee pull out the
+    entities and relationships. We then read those relationships back as simple
+    "subject -predicate-> object" strings so the caller can reconcile them
+    against our versioned facts. Returns (triples, error).
+    """
+    try:
+        import cognee
+
+        # Clean slate so the graph reflects only this document.
+        await cognee.prune.prune_data()
+        await cognee.prune.prune_system(metadata=True)
+
+        await cognee.add(text)
+        await cognee.cognify()
+
+        nodes, edges = await _read_graph()
+        label_by_id = {n["id"]: n["label"] for n in nodes}
+
+        triples: list[str] = []
+        for e in edges:
+            subj = label_by_id.get(e["source"], e["source"])
+            obj = label_by_id.get(e["target"], e["target"])
+            rel = e.get("label") or "related to"
+            if subj and obj:
+                triples.append(f"{subj} -{rel}-> {obj}")
+
+        _STATE.update(built=True, commit=None, nodes=len(nodes), edges=len(edges))
+        return triples, None
+    except Exception as e:  # noqa: BLE001
+        return None, _explain(e)
+
+
 async def graph() -> dict:
     """Return the graph Cognee currently holds: {nodes:[...], edges:[...]}."""
     try:

@@ -17,6 +17,7 @@ const TABS: Tab[] = [
     label: "History", href: "/commits", match: ["/commits", "/changes"],
     sub: [{ label: "Commits", href: "/commits" }, { label: "Changes", href: "/changes" }],
   },
+  { label: "Ingest", href: "/ingest-doc", match: ["/ingest-doc"] },
   { label: "Tests", href: "/tests", match: ["/tests"] },
   { label: "Ask", href: "/ask", match: ["/ask"] },
 ];

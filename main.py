@@ -202,6 +202,11 @@ class CompareRequest(BaseModel):
     question: str
 
 
+class IngestDocumentRequest(BaseModel):
+    text: str
+    message: str = "Ingested document"
+
+
 # ---------------------------------------------------------------------------
 # Cognee helpers
 # ---------------------------------------------------------------------------
@@ -211,6 +216,21 @@ def _facts_at_commit(commit_id: int) -> list[sqlite3.Row]:
         return conn.execute(
             """
             SELECT subject, predicate, object
+            FROM facts
+            WHERE commit_id <= ? AND (status = 'active' OR superseded_commit_id > ?)
+            ORDER BY id
+            """,
+            (commit_id, commit_id),
+        ).fetchall()
+
+
+def _active_facts_with_ids(commit_id: int) -> list[sqlite3.Row]:
+    """Active facts at a commit, including their row id (needed to supersede
+    specific facts during document ingestion)."""
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT id, subject, predicate, object
             FROM facts
             WHERE commit_id <= ? AND (status = 'active' OR superseded_commit_id > ?)
             ORDER BY id
@@ -424,6 +444,24 @@ def _parse_json_array(text: str):
     try:
         data = json.loads(t[start : end + 1])
         return data if isinstance(data, list) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_json_object(text: str):
+    """Pull a JSON object out of an LLM response, tolerating ```json fences."""
+    import json
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("```", 2)[1] if t.count("```") >= 2 else t
+        if t.lower().startswith("json"):
+            t = t[4:]
+    start, end = t.find("{"), t.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        data = json.loads(t[start : end + 1])
+        return data if isinstance(data, dict) else None
     except Exception:  # noqa: BLE001
         return None
 
@@ -806,6 +844,150 @@ async def ingest():
         max_commit = conn.execute("SELECT MAX(id) FROM commits").fetchone()[0] or 1
     rows = _facts_at_commit(max_commit)
     return {"status": "ready", "facts_loaded": len(rows), "at_commit": max_commit}
+
+
+async def _reconcile_document(
+    document_text: str, extracted_relationships: str, current_rows
+) -> tuple[dict | None, str | None]:
+    """Given a document (plus the relationships Cognee extracted from it) and the
+    current active facts, ask the LLM to produce the knowledge-base update: which
+    facts to add and which existing facts (by id) to supersede. Returns (plan, error)."""
+    facts_block = "\n".join(
+        f"[{r['id']}] {r['subject']} | {r['predicate']} | {r['object']}"
+        for r in current_rows
+    ) or "(the knowledge base is currently empty)"
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You maintain a versioned company knowledge base made of "
+                "(subject, predicate, object) facts. A new document was ingested. Update "
+                "the knowledge base so it reflects the document.\n"
+                "Output ONLY a JSON object of the form:\n"
+                '{"new_facts": [{"subject": "...", "predicate": "...", "object": "..."}], '
+                '"supersede_ids": [<id>, ...]}\n'
+                "Rules:\n"
+                "- When the document updates a policy, headcount, role, price, or ANY attribute "
+                "that an existing fact already records, you MUST supersede the outdated fact(s) "
+                "(put their ids in supersede_ids) AND add a corrected new_fact.\n"
+                "- Treat a policy as one subject: e.g. the remote-work policy's 'in-office days' "
+                "and 'remote days' describe the SAME policy — a document changing either one "
+                "supersedes the existing RemoteWorkPolicy fact and adds the updated one.\n"
+                "- Reuse the existing subject wording when referring to the same thing "
+                "(e.g. keep using 'RemoteWorkPolicy', 'PayrollRule').\n"
+                "- Add a new_fact for genuinely new information the document introduces.\n"
+                "- Do not invent facts the document does not support.\n"
+                "- Only return empty arrays if the document truly restates what is already stored."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Current active facts:\n{facts_block}\n\n"
+                f"New document:\n\"\"\"\n{document_text}\n\"\"\"\n\n"
+                f"Relationships Cognee extracted from it:\n{extracted_relationships}\n\n"
+                "Produce the JSON update."
+            ),
+        },
+    ]
+
+    text, err = await _complete(messages)
+    if err:
+        return None, err
+    plan = _parse_json_object(text)
+    if plan is None:
+        return None, "Could not parse the document reconciliation result."
+    return plan, None
+
+
+@app.post("/ingest-document")
+async def ingest_document(body: IngestDocumentRequest):
+    """Ingest a raw document: Cognee extracts its entities/relationships, we
+    reconcile those against the current memory, and write the resulting changes
+    as a new commit (superseding facts they replace). The new commit becomes the
+    live memory so answers change immediately."""
+    if not body.text.strip():
+        raise HTTPException(status_code=400, detail="Document text cannot be empty.")
+
+    # 1. Cognee-powered extraction. If Cognee is unavailable (e.g. serverless) or
+    #    rate-limited, fall back to reconciling against the raw document text so
+    #    the flow still works end to end.
+    triples, cog_err = await cognee_engine.extract(body.text)
+    if triples:
+        extracted_relationships = "\n".join(triples)
+        extractor = "cognee"
+    else:
+        extracted_relationships = "(Cognee extraction unavailable — reconciling from the document text directly.)"
+        extractor = "text-fallback"
+
+    # 2. Reconcile against the currently deployed memory. The reconciler sees both
+    #    the raw document and Cognee's extracted relationships.
+    base_commit = _active_commit()
+    current = _active_facts_with_ids(base_commit)
+    plan, err = await _reconcile_document(body.text.strip(), extracted_relationships, current)
+    if err:
+        return JSONResponse(status_code=503, content={"detail": err})
+
+    new_facts = plan.get("new_facts") or []
+    supersede_ids = plan.get("supersede_ids") or []
+
+    if not new_facts and not supersede_ids:
+        return {
+            "commit_id": None,
+            "facts_added": 0,
+            "facts_superseded": 0,
+            "extractor": extractor,
+            "base_commit": base_commit,
+            "message": "The document introduced no changes to the memory.",
+        }
+
+    # 3. Write the changes as a new commit in the SQLite system of record.
+    with get_conn() as conn:
+        cur = conn.execute("INSERT INTO commits (message) VALUES (?)", (body.message,))
+        new_commit_id = cur.lastrowid
+
+        superseded = 0
+        for fid in supersede_ids:
+            try:
+                res = conn.execute(
+                    "UPDATE facts SET status='superseded', superseded_commit_id=? "
+                    "WHERE id=? AND status='active'",
+                    (new_commit_id, int(fid)),
+                )
+                superseded += res.rowcount
+            except (ValueError, TypeError):
+                continue
+
+        added = 0
+        for f in new_facts:
+            subj = str(f.get("subject", "")).strip()
+            pred = str(f.get("predicate", "")).strip()
+            obj = str(f.get("object", "")).strip()
+            if not (subj and pred and obj):
+                continue
+            conn.execute(
+                "INSERT INTO facts (subject, predicate, object, source, commit_id, status) "
+                "VALUES (?, ?, ?, ?, ?, 'active')",
+                (subj, pred, obj, body.message, new_commit_id),
+            )
+            added += 1
+
+        # Deploy the new commit so the AI answers from the updated memory.
+        conn.execute(
+            "INSERT INTO app_state (key, value) VALUES ('active_commit', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (str(new_commit_id),),
+        )
+        conn.commit()
+
+    return {
+        "commit_id": new_commit_id,
+        "facts_added": added,
+        "facts_superseded": superseded,
+        "extractor": extractor,
+        "base_commit": base_commit,
+    }
 
 
 @app.post("/ask")
