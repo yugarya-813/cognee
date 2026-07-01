@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { RelationshipLine } from "../components/Relationship";
+import { RelationshipLine, Triple } from "../components/Relationship";
+import { ContradictionBanner, ContraItem } from "../components/Contradictions";
 
 import { API } from "../config";
 
@@ -30,6 +31,11 @@ interface Impact {
   impacted_facts: ImpactFact[];
   count: number;
 }
+interface ContraPair {
+  fact_a: Triple;
+  fact_b: Triple;
+  reason: string;
+}
 
 export default function ChangesPage() {
   const [commits, setCommits] = useState<Commit[]>([]);
@@ -37,6 +43,7 @@ export default function ChangesPage() {
   const [toCommit, setToCommit] = useState<number | null>(null);
   const [diff, setDiff] = useState<DiffRow[] | null>(null);
   const [impact, setImpact] = useState<Impact | null>(null);
+  const [contradictions, setContradictions] = useState<ContraPair[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -65,9 +72,11 @@ export default function ChangesPage() {
     Promise.all([
       fetch(`${API}/diff?from=${fromCommit}&to=${toCommit}`).then((r) => r.json()),
       fetch(`${API}/impact?commit=${toCommit}`).then((r) => r.json()),
-    ]).then(([diffData, impactData]) => {
+      fetch(`${API}/contradictions?commit=${toCommit}`).then((r) => r.json()),
+    ]).then(([diffData, impactData, contraData]) => {
       setDiff(diffData);
       setImpact(impactData);
+      setContradictions(contraData?.contradictions ?? []);
       setLoading(false);
     });
   }, [fromCommit, toCommit]);
@@ -104,6 +113,16 @@ export default function ChangesPage() {
       )}
 
       {loading && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 13 }}>Loading…</div>}
+
+      {!loading && contradictions.length > 0 && (
+        <ContradictionBanner
+          items={contradictions.map<ContraItem>((c) => ({
+            reason: c.reason,
+            left: c.fact_a,
+            right: c.fact_b,
+          }))}
+        />
+      )}
 
       {!loading && diff && (
         <>

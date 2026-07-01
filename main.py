@@ -225,12 +225,12 @@ def _facts_at_commit(commit_id: int) -> list[sqlite3.Row]:
 
 
 def _active_facts_with_ids(commit_id: int) -> list[sqlite3.Row]:
-    """Active facts at a commit, including their row id (needed to supersede
-    specific facts during document ingestion)."""
+    """Active facts at a commit, including their row id and source (needed to
+    supersede specific facts and to explain contradictions during ingestion)."""
     with get_conn() as conn:
         return conn.execute(
             """
-            SELECT id, subject, predicate, object
+            SELECT id, subject, predicate, object, source
             FROM facts
             WHERE commit_id <= ? AND (status = 'active' OR superseded_commit_id > ?)
             ORDER BY id
@@ -254,6 +254,13 @@ def _active_commit() -> int:
         ).fetchone()
         head = conn.execute("SELECT MAX(id) FROM commits").fetchone()[0]
     return int(row["value"]) if row else (head or 1)
+
+
+def _head_commit() -> int:
+    """The most recent commit id (HEAD)."""
+    with get_conn() as conn:
+        head = conn.execute("SELECT MAX(id) FROM commits").fetchone()[0]
+    return head or 1
 
 
 def _all_facts_text() -> str:
@@ -310,6 +317,86 @@ def _build_graph(commit_id: int) -> dict:
         })
 
     return {"commit": commit_id, "nodes": list(nodes.values()), "edges": edges}
+
+
+# ---------------------------------------------------------------------------
+# Contradiction detection — simple, explainable, no LLM required
+#
+# Two facts contradict when they talk about the SAME topic (share a meaningful
+# keyword in their object text) but assert DIFFERENT numeric values. This catches
+# the classic case: a new "5 days in-office" policy vs an existing payroll rule
+# still referencing "3 days in-office". Pure string logic, so it runs instantly
+# on every ingest/commit before any tests are run.
+# ---------------------------------------------------------------------------
+
+# Generic words that don't identify a shared topic on their own. This includes
+# measurement UNITS (employees, dollars, million, …) — two facts both measured in
+# "employees" or "dollars" are not in conflict just because the numbers differ
+# (different departments have different headcounts). A real contradiction needs a
+# shared *topic* term (e.g. "office"), not just a shared unit.
+_CONTRA_STOP = {
+    # structural / filler
+    "the", "and", "for", "per", "day", "days", "week", "weeks", "with", "that",
+    "this", "are", "was", "all", "any", "its", "has", "have", "from", "not",
+    "but", "one", "year", "years", "time", "only", "now", "new", "full", "staff",
+    "team", "each", "into", "our", "their", "requires", "require", "allows",
+    "allow", "grants", "grant", "eligibility", "eligible",
+    # measurement units / magnitudes (generic, not a topic)
+    "employees", "employee", "dollars", "dollar", "million", "billion",
+    "thousand", "hundred", "percent", "people", "person", "members", "member",
+    "headcount", "count", "usd", "series", "round",
+}
+
+
+def _contra_keywords(text: str) -> set[str]:
+    toks = re.findall(r"[a-z0-9]+", text.lower())
+    return {t for t in toks if len(t) >= 4 and not t.isdigit() and t not in _CONTRA_STOP}
+
+
+def _contra_numbers(text: str) -> set[str]:
+    return set(re.findall(r"\d+", text))
+
+
+def _conflict_reason(new_fact: dict, existing: dict) -> str | None:
+    """If new_fact contradicts the existing fact, return a human-readable reason;
+    otherwise None. A contradiction = same topic (shared keyword) but different
+    numeric values."""
+    n_nums = _contra_numbers(new_fact["object"])
+    e_nums = _contra_numbers(existing["object"])
+    if not n_nums or not e_nums or (n_nums & e_nums):
+        return None  # no numbers to compare, or they agree on a value
+
+    shared = _contra_keywords(new_fact["object"]) & _contra_keywords(existing["object"])
+    if not shared:
+        return None
+
+    topic = ", ".join(sorted(shared))
+    return (
+        f'"{new_fact["subject"]} {new_fact["predicate"]} {new_fact["object"]}" '
+        f'conflicts with "{existing["subject"]} {existing["predicate"]} {existing["object"]}" '
+        f'— they disagree on "{topic}" ({"/".join(sorted(n_nums))} vs {"/".join(sorted(e_nums))}).'
+    )
+
+
+def _detect_contradictions(new_facts: list[dict], existing_rows) -> list[dict]:
+    """Compare each incoming fact against the existing active facts and return
+    the contradictions found."""
+    out: list[dict] = []
+    for nf in new_facts:
+        for ef in existing_rows:
+            reason = _conflict_reason(nf, dict(ef))
+            if reason:
+                out.append({
+                    "new_fact": {
+                        "subject": nf["subject"], "predicate": nf["predicate"], "object": nf["object"],
+                    },
+                    "existing_fact": {
+                        "subject": ef["subject"], "predicate": ef["predicate"],
+                        "object": ef["object"], "source": ef["source"],
+                    },
+                    "reason": reason,
+                })
+    return out
 
 
 _FALLBACK_MODELS = [
@@ -608,6 +695,22 @@ def create_commit(body: CommitRequest):
     if not body.changes:
         raise HTTPException(status_code=400, detail="changes list cannot be empty")
 
+    # Contradiction check (no LLM): compare the facts being added against the
+    # active facts that will remain after this commit's removals.
+    head = _head_commit()
+    added_facts = [
+        {"subject": c.subject, "predicate": c.predicate, "object": c.object}
+        for c in body.changes if c.op == "add"
+    ]
+    removed_keys = {
+        (c.subject, c.predicate, c.object) for c in body.changes if c.op == "remove"
+    }
+    remaining = [
+        r for r in _active_facts_with_ids(head)
+        if (r["subject"], r["predicate"], r["object"]) not in removed_keys
+    ]
+    contradictions = _detect_contradictions(added_facts, remaining)
+
     with get_conn() as conn:
         cur = conn.execute(
             "INSERT INTO commits (message) VALUES (?)", (body.message,)
@@ -637,7 +740,7 @@ def create_commit(body: CommitRequest):
 
         conn.commit()
 
-    return {"commit_id": new_commit_id}
+    return {"commit_id": new_commit_id, "contradictions": contradictions}
 
 
 @app.get("/diff")
@@ -773,6 +876,30 @@ def get_impact(commit: int = Query(..., description="Commit to measure impact of
         "impacted_facts": all_impacted,
         "count": len(all_impacted),
     }
+
+
+@app.get("/contradictions")
+def get_contradictions(commit: int = Query(..., description="Scan for contradictions among active facts at this commit")):
+    """Return any unresolved contradictions among the active facts at a commit —
+    pairs that share a topic but assert different numeric values."""
+    rows = _active_facts_with_ids(commit)
+    out: list[dict] = []
+    for i in range(len(rows)):
+        for j in range(i + 1, len(rows)):
+            reason = _conflict_reason(dict(rows[i]), dict(rows[j]))
+            if reason:
+                out.append({
+                    "fact_a": {
+                        "subject": rows[i]["subject"], "predicate": rows[i]["predicate"],
+                        "object": rows[i]["object"], "source": rows[i]["source"],
+                    },
+                    "fact_b": {
+                        "subject": rows[j]["subject"], "predicate": rows[j]["predicate"],
+                        "object": rows[j]["object"], "source": rows[j]["source"],
+                    },
+                    "reason": reason,
+                })
+    return {"commit": commit, "contradictions": out, "count": len(out)}
 
 
 # ---------------------------------------------------------------------------
@@ -939,8 +1066,24 @@ async def ingest_document(body: IngestDocumentRequest):
             "facts_superseded": 0,
             "extractor": extractor,
             "base_commit": base_commit,
+            "contradictions": [],
             "message": "The document introduced no changes to the memory.",
         }
+
+    # Clean the incoming facts once, up front.
+    clean_new: list[dict] = []
+    for f in new_facts:
+        subj = str(f.get("subject", "")).strip()
+        pred = str(f.get("predicate", "")).strip()
+        obj = str(f.get("object", "")).strip()
+        if subj and pred and obj:
+            clean_new.append({"subject": subj, "predicate": pred, "object": obj})
+
+    # Contradiction check (no LLM): compare the incoming facts against the active
+    # facts that will REMAIN (i.e. excluding the ones being superseded).
+    superseded_set = {int(x) for x in supersede_ids if str(x).isdigit()}
+    remaining = [r for r in current if r["id"] not in superseded_set]
+    contradictions = _detect_contradictions(clean_new, remaining)
 
     # 3. Write the changes as a new commit in the SQLite system of record.
     with get_conn() as conn:
@@ -959,19 +1102,12 @@ async def ingest_document(body: IngestDocumentRequest):
             except (ValueError, TypeError):
                 continue
 
-        added = 0
-        for f in new_facts:
-            subj = str(f.get("subject", "")).strip()
-            pred = str(f.get("predicate", "")).strip()
-            obj = str(f.get("object", "")).strip()
-            if not (subj and pred and obj):
-                continue
+        for f in clean_new:
             conn.execute(
                 "INSERT INTO facts (subject, predicate, object, source, commit_id, status) "
                 "VALUES (?, ?, ?, ?, ?, 'active')",
-                (subj, pred, obj, body.message, new_commit_id),
+                (f["subject"], f["predicate"], f["object"], body.message, new_commit_id),
             )
-            added += 1
 
         # Deploy the new commit so the AI answers from the updated memory.
         conn.execute(
@@ -983,10 +1119,11 @@ async def ingest_document(body: IngestDocumentRequest):
 
     return {
         "commit_id": new_commit_id,
-        "facts_added": added,
+        "facts_added": len(clean_new),
         "facts_superseded": superseded,
         "extractor": extractor,
         "base_commit": base_commit,
+        "contradictions": contradictions,
     }
 
 

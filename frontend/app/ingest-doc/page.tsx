@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { API } from "../config";
 import { RelationshipLine, Triple } from "../components/Relationship";
+import { ContradictionBanner, ContraItem } from "../components/Contradictions";
 
 const SAMPLE = `MEMO — Helix Labs Remote Work Policy update.
 
@@ -16,12 +17,18 @@ interface CommitDetail {
   added: Triple[];
   removed: Triple[];
 }
+interface Contradiction {
+  new_fact: Triple;
+  existing_fact: Triple;
+  reason: string;
+}
 interface IngestResult {
   commit_id: number | null;
   facts_added: number;
   facts_superseded: number;
   extractor: string;
   base_commit: number;
+  contradictions?: Contradiction[];
   message?: string;
 }
 
@@ -249,6 +256,19 @@ export default function IngestPage() {
         }}>
           The document didn&apos;t change anything already in memory — no new commit was created.
         </div>
+      )}
+
+      {/* Contradiction warning — shows immediately on ingest, before tests run */}
+      {result && !processing && result.contradictions && result.contradictions.length > 0 && (
+        <ContradictionBanner
+          items={result.contradictions.map<ContraItem>((c) => ({
+            reason: c.reason,
+            left: c.new_fact,
+            right: c.existing_fact,
+            leftTag: "incoming",
+            rightTag: "existing",
+          }))}
+        />
       )}
 
       {/* Result: new commit + diff + updated answer */}
