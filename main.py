@@ -624,6 +624,87 @@ def get_commit(commit_id: int):
     }
 
 
+@app.get("/history")
+def get_history():
+    """Full audit trail: every commit (newest first) with its message, timestamp,
+    how many facts it added / superseded, and the exact changed facts. One call,
+    everything needed to answer 'what changed, when, and why'."""
+    with get_conn() as conn:
+        commits = conn.execute(
+            "SELECT id, message, created_at FROM commits ORDER BY id DESC"
+        ).fetchall()
+
+        out = []
+        for c in commits:
+            added = conn.execute(
+                "SELECT subject, predicate, object, source FROM facts "
+                "WHERE commit_id = ? ORDER BY id",
+                (c["id"],),
+            ).fetchall()
+            superseded = conn.execute(
+                "SELECT subject, predicate, object, source FROM facts "
+                "WHERE superseded_commit_id = ? ORDER BY id",
+                (c["id"],),
+            ).fetchall()
+            out.append({
+                "id": c["id"],
+                "message": c["message"],
+                "created_at": c["created_at"],
+                "added_count": len(added),
+                "superseded_count": len(superseded),
+                "added": [dict(r) for r in added],
+                "superseded": [dict(r) for r in superseded],
+            })
+    return out
+
+
+@app.get("/fact-history")
+def get_fact_history(subject: str = Query(..., description="Version timeline for this subject")):
+    """The version history of a subject across commits — every value it has held,
+    when it was introduced, and when (if ever) it was superseded."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT f.predicate, f.object, f.source, f.commit_id, f.status,
+                   f.superseded_commit_id,
+                   c.message      AS commit_message,
+                   c.created_at   AS commit_created_at
+            FROM facts f
+            JOIN commits c ON c.id = f.commit_id
+            WHERE lower(f.subject) = lower(?)
+            ORDER BY f.commit_id, f.id
+            """,
+            (subject.strip(),),
+        ).fetchall()
+
+        sup_msgs = {}
+        for r in rows:
+            sc = r["superseded_commit_id"]
+            if sc is not None and sc not in sup_msgs:
+                m = conn.execute(
+                    "SELECT message, created_at FROM commits WHERE id = ?", (sc,)
+                ).fetchone()
+                if m:
+                    sup_msgs[sc] = {"message": m["message"], "created_at": m["created_at"]}
+
+    versions = []
+    for r in rows:
+        sc = r["superseded_commit_id"]
+        versions.append({
+            "predicate": r["predicate"],
+            "object": r["object"],
+            "source": r["source"],
+            "added_at_commit": r["commit_id"],
+            "added_message": r["commit_message"],
+            "added_at": r["commit_created_at"],
+            "status": r["status"],
+            "superseded_at_commit": sc,
+            "superseded_message": sup_msgs.get(sc, {}).get("message") if sc else None,
+            "superseded_at": sup_msgs.get(sc, {}).get("created_at") if sc else None,
+        })
+    return {"subject": subject.strip(), "versions": versions, "count": len(versions)}
+
+
 @app.get("/facts")
 def list_facts(commit: int = Query(..., description="Return active facts as of this commit id")):
     with get_conn() as conn:
