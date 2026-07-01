@@ -8,6 +8,9 @@ const PRESET = "How many days can employees work remotely, and does payroll matc
 interface TierResult {
   answer: string;
   error: boolean;
+  input_tokens?: number;
+  output_tokens?: number;
+  est_cost?: number;
 }
 interface EngramResult extends TierResult {
   deployed_commit: number;
@@ -50,6 +53,15 @@ export default function ComparePage() {
     }
     setLoading(false);
   }
+
+  const maxInput = data
+    ? Math.max(
+        data.no_memory.input_tokens ?? 0,
+        data.generic.input_tokens ?? 0,
+        data.engram.input_tokens ?? 0,
+        1,
+      )
+    : 1;
 
   return (
     <div style={{ padding: "40px 48px", maxWidth: 1180 }}>
@@ -121,22 +133,27 @@ export default function ComparePage() {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.08fr", gap: 16, alignItems: "stretch" }}>
         <TierCard
           tier="weak"
+          tokenTone="neutral"
           name="No Memory"
           subtitle="Stateless LLM — no company facts at all."
           verdict="Can't answer"
           loading={loading}
           result={data?.no_memory}
+          maxInput={maxInput}
         />
         <TierCard
           tier="weak"
+          tokenTone="heavy"
           name="Generic AI Memory"
           subtitle="Dumps every fact ever stored — stale ones included, no versioning."
           verdict="Outdated / contradictory"
           loading={loading}
           result={data?.generic}
+          maxInput={maxInput}
         />
         <TierCard
           tier="hero"
+          tokenTone="lean"
           name="Engram"
           badge="ours"
           subtitle="Only the facts active at the deployed commit — versioned & tested."
@@ -144,16 +161,24 @@ export default function ComparePage() {
           loading={loading}
           result={data?.engram}
           meta={data?.engram}
+          maxInput={maxInput}
         />
       </div>
+
+      {data && (
+        <p style={{ fontSize: 12, color: "rgba(255,255,255,0.32)", textAlign: "center", marginTop: 16, lineHeight: 1.6 }}>
+          Generic memory pays a growing token tax for stale context; Engram loads only current facts.
+        </p>
+      )}
     </div>
   );
 }
 
 function TierCard({
-  tier, name, badge, subtitle, verdict, loading, result, meta,
+  tier, tokenTone, name, badge, subtitle, verdict, loading, result, meta, maxInput,
 }: {
   tier: "weak" | "hero";
+  tokenTone: "neutral" | "heavy" | "lean";
   name: string;
   badge?: string;
   subtitle: string;
@@ -161,6 +186,7 @@ function TierCard({
   loading: boolean;
   result?: TierResult;
   meta?: EngramResult;
+  maxInput: number;
 }) {
   const hero = tier === "hero";
 
@@ -234,6 +260,11 @@ function TierCard({
         )}
       </div>
 
+      {/* token stats — the efficiency story */}
+      {!loading && result && result.input_tokens != null && (
+        <TokenStats result={result} maxInput={maxInput} tone={tokenTone} />
+      )}
+
       {/* engram metadata */}
       {hero && meta && !meta.error && meta.deployed_commit != null && (
         <div style={{
@@ -252,6 +283,36 @@ function TierCard({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function TokenStats({ result, maxInput, tone }: { result: TierResult; maxInput: number; tone: "neutral" | "heavy" | "lean" }) {
+  const input = result.input_tokens ?? 0;
+  const color = tone === "heavy" ? "#f59e0b" : tone === "lean" ? "#34D399" : "rgba(255,255,255,0.45)";
+  const pct = Math.max(5, Math.round((input / maxInput) * 100));
+  const label = tone === "heavy" ? "heavy" : tone === "lean" ? "lean" : "minimal";
+
+  return (
+    <div style={{ marginTop: 16, paddingTop: 13, borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+          context tokens
+          <span style={{ color, marginLeft: 6, fontWeight: 600 }}>· {label}</span>
+        </span>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color, fontFamily: "'SF Mono','Fira Code',monospace" }}>
+          {input.toLocaleString()}
+        </span>
+      </div>
+      {/* relative-size bar */}
+      <div style={{ height: 5, borderRadius: 5, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 5, transition: "width 550ms cubic-bezier(.22,.61,.36,1)" }} />
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 8, fontSize: 11, color: "rgba(255,255,255,0.32)" }}>
+        <span>{(result.output_tokens ?? 0).toLocaleString()} out</span>
+        <span style={{ color: "rgba(255,255,255,0.18)" }}>·</span>
+        <span>~${(result.est_cost ?? 0).toFixed(6)} <span style={{ color: "rgba(255,255,255,0.22)" }}>est.</span></span>
+      </div>
     </div>
   );
 }

@@ -433,15 +433,11 @@ async def _complete(messages: list[dict]):
         f"Last error: {str(last_err)[:200]}"
     )
 
-async def _ask_llm(question: str, commit_id: int) -> list[str]:
-    """Ask a question by passing all active facts as context in a single LLM call.
-    Tries multiple models in order if one is rate-limited."""
-    rows = _facts_at_commit(commit_id)
-    if not rows:
-        raise HTTPException(status_code=400, detail="No active facts at that commit.")
-
-    facts_text = _facts_text(rows)
-    messages = [
+def _engram_messages(question: str, facts_text: str) -> list[dict]:
+    """The prompt Engram builds: only the active facts as context. Single source
+    of truth so /ask and the Engram compare tier stay identical (and token counts
+    reflect the real prompt)."""
+    return [
         {
             "role": "system",
             "content": (
@@ -459,6 +455,15 @@ async def _ask_llm(question: str, commit_id: int) -> list[str]:
         },
     ]
 
+
+async def _ask_llm(question: str, commit_id: int) -> list[str]:
+    """Ask a question by passing all active facts as context in a single LLM call.
+    Tries multiple models in order if one is rate-limited."""
+    rows = _facts_at_commit(commit_id)
+    if not rows:
+        raise HTTPException(status_code=400, detail="No active facts at that commit.")
+
+    messages = _engram_messages(question, _facts_text(rows))
     text, err = await _complete(messages)
     if err:
         return None, err
@@ -1217,17 +1222,62 @@ async def ask(body: AskRequest):
 
 
 # ---------------------------------------------------------------------------
+# Token accounting — model-agnostic, via tiktoken. We count the ACTUAL prompt
+# text each tier builds (not an abstract estimate), so the comparison shows the
+# real context-size difference between the tiers. Works the same on Gemini or a
+# local model later; nothing here touches the LLM config.
+# ---------------------------------------------------------------------------
+
+# Estimated price per 1K tokens — a rough blended Gemini-flash rate, ONLY an
+# estimate and clearly secondary to the raw token count. Set to 0.0 for a local
+# / self-hosted model (those are free).
+PRICE_PER_1K_TOKENS = 0.0002
+
+_TOKEN_ENC = None
+
+
+def _count_tokens(text: str) -> int:
+    """Count tokens using tiktoken's default encoding (cl100k_base). This is a
+    clearly-labeled, model-agnostic approximation of a model's tokenizer."""
+    global _TOKEN_ENC
+    try:
+        import tiktoken
+        if _TOKEN_ENC is None:
+            _TOKEN_ENC = tiktoken.get_encoding("cl100k_base")
+        return len(_TOKEN_ENC.encode(text or ""))
+    except Exception:  # noqa: BLE001 — never let token counting break an answer
+        return max(0, round(len(text or "") / 4))  # ~4 chars/token fallback
+
+
+def _tier_stats(messages: list[dict], answer: str | None) -> dict:
+    """Token/cost stats for one tier:
+      input_tokens  — the context/prompt actually sent to the model
+      output_tokens — the answer length
+      est_cost      — (in+out)/1000 * rate; an ESTIMATE, $0 for local models.
+    """
+    input_tokens = _count_tokens("\n".join(m.get("content", "") for m in messages))
+    output_tokens = _count_tokens(answer or "")
+    est_cost = round((input_tokens + output_tokens) / 1000 * PRICE_PER_1K_TOKENS, 6)
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "est_cost": est_cost,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Three-way comparison demo
 #   Tier 1 (no memory):      LLM with NO facts.
 #   Tier 2 (generic memory): LLM with EVERY fact ever stored, stale ones
 #                            included, no version awareness.
 #   Tier 3 (Engram):         LLM with ONLY the facts active at the DEPLOYED
 #                            commit — the real product behaviour.
-# These use genuinely different context construction; nothing is faked.
+# These use genuinely different context construction; nothing is faked. Each
+# tier returns its answer PLUS the token count of the context it built.
 # ---------------------------------------------------------------------------
 
-async def _compare_no_memory(question: str):
-    messages = [
+def _no_memory_messages(question: str) -> list[dict]:
+    return [
         {
             "role": "system",
             "content": (
@@ -1239,12 +1289,10 @@ async def _compare_no_memory(question: str):
         },
         {"role": "user", "content": question},
     ]
-    text, err = await _complete(messages)
-    return text, err
 
 
-async def _compare_generic(question: str):
-    messages = [
+def _generic_messages(question: str) -> list[dict]:
+    return [
         {
             "role": "system",
             "content": (
@@ -1261,26 +1309,49 @@ async def _compare_generic(question: str):
             "content": f"Stored facts (all considered current):\n{_all_facts_text()}\n\nQuestion: {question}",
         },
     ]
+
+
+async def _compare_no_memory(question: str):
+    """Returns (text, err, messages) — messages exposed so we can count tokens."""
+    messages = _no_memory_messages(question)
     text, err = await _complete(messages)
-    return text, err
+    return text, err, messages
+
+
+async def _compare_generic(question: str):
+    """Returns (text, err, messages)."""
+    messages = _generic_messages(question)
+    text, err = await _complete(messages)
+    return text, err, messages
+
+
+async def _compare_engram_run(question: str, commit: int):
+    """Engram tier: only the facts active at the deployed commit. Returns
+    (text, err, messages)."""
+    rows = _facts_at_commit(commit)
+    messages = _engram_messages(question, _facts_text(rows) if rows else "")
+    if not rows:
+        return None, "No active facts at that commit.", messages
+    text, err = await _complete(messages)
+    return text, err, messages
 
 
 @app.post("/compare/no-memory")
 async def compare_no_memory(body: CompareRequest):
     """Tier 1 — stateless: the LLM gets the question with no facts at all."""
-    text, err = await _compare_no_memory(body.question)
+    text, err, messages = await _compare_no_memory(body.question)
     if err:
         return JSONResponse(status_code=503, content={"detail": err})
-    return {"tier": "no_memory", "question": body.question, "answer": text}
+    return {"tier": "no_memory", "question": body.question, "answer": text, **_tier_stats(messages, text)}
 
 
 @app.post("/compare/generic")
 async def compare_generic(body: CompareRequest):
     """Tier 2 — naive RAG/Mem0 style: every fact ever stored, stale included."""
-    text, err = await _compare_generic(body.question)
+    text, err, messages = await _compare_generic(body.question)
     if err:
         return JSONResponse(status_code=503, content={"detail": err})
-    return {"tier": "generic", "question": body.question, "answer": text}
+    return {"tier": "generic", "question": body.question, "answer": text, **_tier_stats(messages, text)}
 
 
 @app.post("/compare/engram")
@@ -1288,7 +1359,7 @@ async def compare_engram(body: CompareRequest):
     """Tier 3 — Engram: only facts active at the deployed commit, plus the test
     status for that commit so the answer is verifiable."""
     deployed = _active_commit()
-    answers, err = await _ask_llm(body.question, deployed)
+    text, err, messages = await _compare_engram_run(body.question, deployed)
     if err:
         return JSONResponse(status_code=503, content={"detail": err})
 
@@ -1299,10 +1370,11 @@ async def compare_engram(body: CompareRequest):
     return {
         "tier": "engram",
         "question": body.question,
-        "answer": answers[0] if answers else "",
+        "answer": text or "",
         "deployed_commit": deployed,
         "tests_passed": tests["passed"] if tests else None,
         "tests_total": tests["total"] if tests else None,
+        **_tier_stats(messages, text),
     }
 
 
@@ -1329,9 +1401,9 @@ async def compare_all(body: CompareRequest):
     deployed = _active_commit()
     baseline = _compare_baseline(body.question) or {}
 
-    nm_text, nm_err = await _compare_no_memory(body.question)
-    g_text, g_err = await _compare_generic(body.question)
-    e_answers, e_err = await _ask_llm(body.question, deployed)
+    nm_text, nm_err, nm_msgs = await _compare_no_memory(body.question)
+    g_text, g_err, g_msgs = await _compare_generic(body.question)
+    e_text, e_err, e_msgs = await _compare_engram_run(body.question, deployed)
     tests = _cached_tests(deployed)
 
     def resolve(text, err, key):
@@ -1343,19 +1415,22 @@ async def compare_all(body: CompareRequest):
 
     nm_answer, nm_failed = resolve(nm_text, nm_err, "no_memory")
     g_answer, g_failed = resolve(g_text, g_err, "generic")
-    e_raw = e_answers[0] if e_answers else ""
-    e_answer, e_failed = resolve(e_raw, e_err, "engram")
+    e_answer, e_failed = resolve(e_text, e_err, "engram")
 
+    # Token stats reflect the ACTUAL prompt each tier built (its context size),
+    # which is the point — independent of whether the answer came live or from the
+    # baseline backfill. Generic sends every stored fact; Engram only the active ones.
     return {
         "question": body.question,
-        "no_memory": {"answer": nm_answer, "error": nm_failed},
-        "generic": {"answer": g_answer, "error": g_failed},
+        "no_memory": {"answer": nm_answer, "error": nm_failed, **_tier_stats(nm_msgs, nm_answer)},
+        "generic": {"answer": g_answer, "error": g_failed, **_tier_stats(g_msgs, g_answer)},
         "engram": {
             "answer": e_answer,
             "error": e_failed,
             "deployed_commit": deployed,
             "tests_passed": tests["passed"] if tests else None,
             "tests_total": tests["total"] if tests else None,
+            **_tier_stats(e_msgs, e_answer),
         },
     }
 
