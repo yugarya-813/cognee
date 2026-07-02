@@ -1,85 +1,215 @@
 @import "tailwindcss";
 
+/* ============================================================================
+   Engram design system — dark, high-contrast developer aesthetic.
+   Deep near-black canvas, crisp white text, one electric-blue accent used
+   sparingly, monospace for anything version-control-flavored (commits, diffs,
+   token counts, the terminal). Tokens live here; pages read them via var().
+   ============================================================================ */
+
+:root {
+  /* surfaces */
+  --bg:          #08090D;
+  --surface:     #0E1016;
+  --surface-2:   #14171F;
+  --surface-3:   #191D27;
+  --hairline:    rgba(255,255,255,0.08);
+  --hairline-2:  rgba(255,255,255,0.14);
+
+  /* text */
+  --text:    #F5F7FC;
+  --text-2:  rgba(245,247,252,0.62);
+  --text-3:  rgba(245,247,252,0.40);
+  --text-4:  rgba(245,247,252,0.26);
+
+  /* accent — electric blue */
+  --accent:        #3D7CFF;
+  --accent-bright: #5E93FF;
+  --accent-weak:   rgba(61,124,255,0.12);
+  --accent-line:   rgba(61,124,255,0.35);
+  --accent-glow:   rgba(61,124,255,0.45);
+
+  /* semantic */
+  --green: #35D6A0;
+  --green-weak: rgba(53,214,160,0.12);
+  --amber: #F5A623;
+  --amber-weak: rgba(245,166,35,0.12);
+  --red:   #F87171;
+  --red-weak: rgba(248,113,113,0.12);
+
+  /* shape */
+  --r-sm: 8px;
+  --r:    12px;
+  --r-lg: 16px;
+
+  --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace;
+}
+
 *, *::before, *::after { box-sizing: border-box; }
 
 html, body {
   height: 100%;
   margin: 0;
   padding: 0;
-  background: #0A0B12;
-  color: #fff;
-  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv01";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-::selection { background: rgba(59, 130, 246, 0.25); }
+::selection { background: rgba(61,124,255,0.28); }
 
-::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.10); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
+
+.mono { font-family: var(--font-mono); }
+
+/* ---- Buttons ---------------------------------------------------------------
+   Filled electric-blue primary + dark outline secondary, matching the brief. */
+.eg-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  font-family: var(--font-sans); font-size: 14px; font-weight: 600;
+  padding: 11px 20px; border-radius: var(--r-sm); cursor: pointer;
+  border: 1px solid transparent; text-decoration: none; white-space: nowrap;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease,
+              box-shadow 160ms ease, transform 120ms ease;
+}
+.eg-btn:active { transform: translateY(1px); }
+.eg-btn-primary { background: var(--accent); color: #fff; box-shadow: 0 6px 24px -8px var(--accent-glow); }
+.eg-btn-primary:hover { background: var(--accent-bright); box-shadow: 0 8px 30px -6px var(--accent-glow); }
+.eg-btn-outline { background: var(--surface-2); color: var(--text); border-color: var(--hairline-2); }
+.eg-btn-outline:hover { background: var(--surface-3); border-color: rgba(255,255,255,0.22); }
+.eg-btn:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+.eg-btn:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 2px; }
+
+/* ---- Panels / surfaces ---- */
+.eg-panel {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r);
+}
+.eg-panel-2 { background: var(--surface-2); border: 1px solid var(--hairline); border-radius: var(--r); }
+
+/* ---- Status pill (hero badge) ---- */
+.eg-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--font-mono); font-size: 12px; color: var(--accent-bright);
+  background: var(--accent-weak); border: 1px solid var(--accent-line);
+  border-radius: 999px; padding: 5px 13px; letter-spacing: 0.01em;
+}
+.eg-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-bright);
+  box-shadow: 0 0 8px var(--accent-glow); animation: egPulse 2.4s ease-in-out infinite; }
+@keyframes egPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* ---- Chips (small labels) ---- */
+.eg-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; font-weight: 500; border-radius: 6px; padding: 2px 9px;
+  border: 1px solid var(--hairline); color: var(--text-2); background: rgba(255,255,255,0.03);
+}
 
 /* ---- Top nav primary tabs ---- */
 .top-tab {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  padding: 9px 14px;
-  border-radius: 8px;
-  font-size: 13.5px;
-  font-weight: 450;
-  color: rgba(255,255,255,0.55);
-  text-decoration: none;
+  position: relative; display: inline-flex; align-items: center;
+  padding: 8px 13px; border-radius: var(--r-sm); font-size: 13.5px; font-weight: 500;
+  color: var(--text-3); text-decoration: none;
   transition: color 160ms ease, background 160ms ease;
 }
-.top-tab:hover { color: #fff; background: rgba(255,255,255,0.05); }
-.top-tab.active { color: #fff; font-weight: 550; }
+.top-tab:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+.top-tab.active { color: var(--text); }
 .top-tab .ul {
-  position: absolute;
-  left: 14px; right: 14px; bottom: 4px;
-  height: 2px; border-radius: 2px;
-  background: linear-gradient(90deg, #3B82F6, #6366F1);
-  transform: scaleX(0);
-  transform-origin: center;
+  position: absolute; left: 13px; right: 13px; bottom: 3px; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-bright));
+  transform: scaleX(0); transform-origin: center; box-shadow: 0 0 8px var(--accent-glow);
   transition: transform 220ms cubic-bezier(.4,0,.2,1);
 }
-.top-tab:hover .ul { transform: scaleX(0.55); opacity: 0.7; }
+.top-tab:hover .ul { transform: scaleX(0.5); opacity: 0.6; }
 .top-tab.active .ul { transform: scaleX(1); opacity: 1; }
 
 /* ---- Sub tabs ---- */
 .sub-tab {
-  font-size: 12.5px;
-  font-weight: 450;
-  color: rgba(255,255,255,0.42);
-  text-decoration: none;
-  padding: 4px 12px;
-  border-radius: 7px;
-  border: 1px solid transparent;
-  transition: all 150ms ease;
+  font-size: 12.5px; font-weight: 500; color: var(--text-3); text-decoration: none;
+  padding: 4px 12px; border-radius: 7px; border: 1px solid transparent; transition: all 150ms ease;
 }
-.sub-tab:hover { color: rgba(255,255,255,0.8); background: rgba(255,255,255,0.04); }
-.sub-tab.active {
-  color: #93b4fc;
-  background: rgba(59,130,246,0.1);
-  border-color: rgba(59,130,246,0.3);
+.sub-tab:hover { color: var(--text-2); background: rgba(255,255,255,0.04); }
+.sub-tab.active { color: var(--accent-bright); background: var(--accent-weak); border-color: var(--accent-line); }
+
+/* ---- Dropdown menu (Explore) ---- */
+.eg-menu {
+  position: absolute; top: calc(100% + 8px); right: 0; min-width: 220px;
+  background: var(--surface-2); border: 1px solid var(--hairline-2); border-radius: var(--r);
+  padding: 6px; box-shadow: 0 16px 50px -12px rgba(0,0,0,0.7);
+  display: flex; flex-direction: column; gap: 2px; z-index: 60;
+  animation: egMenuIn 140ms ease both;
 }
+@keyframes egMenuIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.eg-menu a {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px;
+  font-size: 13px; color: var(--text-2); text-decoration: none; transition: background 130ms, color 130ms;
+}
+.eg-menu a:hover { background: rgba(255,255,255,0.05); color: var(--text); }
+.eg-menu a.active { color: var(--accent-bright); background: var(--accent-weak); }
+
+/* ---- Hero (landing) ---- */
+.hero-grid { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: center; }
+.hero-title {
+  font-size: clamp(40px, 5.4vw, 66px); font-weight: 800; line-height: 1.03;
+  letter-spacing: -0.035em; color: var(--text); margin: 0;
+}
+.hero-accent { color: var(--accent); }
+@media (max-width: 980px) {
+  .hero-grid { grid-template-columns: 1fr; gap: 40px; }
+  .hero-title { font-size: clamp(34px, 9vw, 52px); }
+}
+
+/* ---- Workflow step rail ---- */
+.step-rail { display: flex; align-items: center; gap: 0; flex-wrap: wrap; }
+.step-node {
+  display: inline-flex; align-items: center; gap: 8px; padding: 7px 13px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 500; color: var(--text-3); text-decoration: none;
+  border: 1px solid var(--hairline); background: var(--surface); transition: all 160ms ease; white-space: nowrap;
+}
+.step-node:hover { color: var(--text); border-color: var(--hairline-2); }
+.step-node.active { color: #fff; background: var(--accent); border-color: var(--accent); box-shadow: 0 4px 18px -6px var(--accent-glow); }
+.step-node.done { color: var(--green); border-color: rgba(53,214,160,0.3); background: var(--green-weak); }
+.step-num { font-family: var(--font-mono); font-size: 11px; opacity: 0.8; }
+.step-sep { width: 20px; height: 1px; background: var(--hairline-2); flex-shrink: 0; }
+@media (max-width: 760px) { .step-sep { width: 10px; } .step-node { padding: 6px 10px; font-size: 11.5px; } }
 
 /* ---- Page entrance transition ---- */
-.page-fade { animation: pageIn 380ms cubic-bezier(.22,.61,.36,1) both; }
-@keyframes pageIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: none; }
-}
+.page-fade { animation: pageIn 360ms cubic-bezier(.22,.61,.36,1) both; }
+@keyframes pageIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
-/* ---- Reusable hover lift for cards ---- */
+/* ---- Reusable hover lift ---- */
 .lift { transition: transform 200ms cubic-bezier(.22,.61,.36,1), box-shadow 200ms ease, border-color 200ms ease, opacity 200ms ease; }
 .lift:hover { transform: translateY(-3px); }
 
 /* ---- Comparison tier cards ---- */
-.tier-card.weak { opacity: 0.76; }
-.tier-card.weak:hover { opacity: 0.96; border-color: rgba(255,255,255,0.15) !important; }
-.tier-card.hero:hover { box-shadow: 0 0 0 1px rgba(52,211,153,0.22), 0 14px 54px rgba(52,211,153,0.18) !important; }
+.tier-card.weak { opacity: 0.82; }
+.tier-card.weak:hover { opacity: 1; border-color: var(--hairline-2) !important; }
+.tier-card.hero:hover { box-shadow: 0 0 0 1px rgba(53,214,160,0.22), 0 18px 60px -12px rgba(53,214,160,0.20) !important; }
 
-/* ---- Legacy sidebar nav links (kept harmless) ---- */
-.nav-link { display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:8px; font-size:13px; color:rgba(255,255,255,0.45); text-decoration:none; }
-.browse-btn:hover { background: rgba(59,130,246,0.15) !important; border-color: rgba(59,130,246,0.5) !important; }
+/* ---- Focus visibility (a11y) ---- */
+a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent-bright); outline-offset: 2px; border-radius: 4px;
+}
+
+/* ---- Terminal blinking cursor ---- */
+.term-cursor { display: inline-block; width: 8px; height: 15px; background: var(--accent-bright);
+  margin-left: 2px; vertical-align: text-bottom; animation: egBlink 1s step-end infinite; }
+@keyframes egBlink { 0%,50% { opacity: 1; } 51%,100% { opacity: 0; } }
+
+/* ---- Respect reduced motion ---- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
+  .term-cursor { animation: none; }
+}
+
+/* legacy (unused sidebar) kept harmless */
+.nav-link { display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:8px; font-size:13px; color:var(--text-3); text-decoration:none; }
