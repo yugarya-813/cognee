@@ -43,8 +43,12 @@ export default function AskPage() {
       let data: Record<string, unknown>;
       try { data = await res.json(); }
       catch { setError(`Backend error (HTTP ${res.status}).`); return; }
-      if (!res.ok) setError((data.detail as string) || "Request failed");
-      else setAnswer(data.answers as string[]);
+      if (!res.ok) {
+        // 503 = provider rate-limit/quota (verbose dump) → show a calm message.
+        setError(res.status === 503
+          ? "⏳ The model is rate-limited right now — try again in a moment."
+          : (data.detail as string) || "Request failed");
+      } else setAnswer(data.answers as string[]);
     } catch {
       setError("Could not reach the backend. Is it running on port 8000?");
     }

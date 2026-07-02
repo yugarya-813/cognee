@@ -67,12 +67,13 @@ export default function ComparePage() {
     <div style={{ padding: "40px 48px", maxWidth: 1180 }}>
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 600, color: "#fff", letterSpacing: "-0.02em", margin: 0 }}>
-          Comparison
+        <span className="eg-pill" style={{ marginBottom: 14 }}><span className="dot" />the payoff</span>
+        <h1 style={{ fontSize: 30, fontWeight: 800, color: "var(--text)", letterSpacing: "-0.03em", margin: 0 }}>
+          Three kinds of memory. One is trustworthy.
         </h1>
-        <p style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", marginTop: 5, maxWidth: 640, lineHeight: 1.6 }}>
-          One question, three kinds of memory. The same model answers each time — only what it&apos;s
-          allowed to remember changes. Watch which one you can actually trust.
+        <p style={{ fontSize: 14.5, color: "var(--text-2)", marginTop: 8, maxWidth: 660, lineHeight: 1.6 }}>
+          The same model answers each time — only what it&apos;s allowed to remember changes.
+          Watch which one stays correct, current, and token-lean.
         </p>
       </div>
 

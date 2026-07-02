@@ -56,9 +56,11 @@ export default function ReplayPage() {
           `${API}/replay?commit=${current.id}&question=${encodeURIComponent(question.trim())}`
         );
         const data = await res.json();
+        // Backend returns a verbose provider error on 503 (e.g. Gemini quota) —
+        // never surface that raw dump; show a calm, actionable message instead.
         const text = res.ok
           ? (data.answers || []).join("\n")
-          : data.detail || "The model is rate-limited — try again in a moment.";
+          : "⏳ The model is rate-limited right now — try again in a moment.";
         cache.current.set(key, text);
         setAnswer(text);
       } catch {

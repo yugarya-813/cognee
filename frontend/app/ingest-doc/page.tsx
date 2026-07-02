@@ -60,7 +60,7 @@ export default function IngestPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question, commit }),
       }).then((r) => r.json());
-      setBeforeAnswer(ans.answers?.[0] ?? ans.detail ?? "—");
+      setBeforeAnswer(ans.answers?.[0] ?? "⏳ The model is rate-limited right now — try again in a moment.");
     } catch {
       setBeforeAnswer("Could not reach the backend.");
     }
@@ -110,7 +110,7 @@ export default function IngestPage() {
         }).then((r) => r.json()),
       ]);
       setDetail(commitDetail);
-      setAfterAnswer(ans.answers?.[0] ?? ans.detail ?? "—");
+      setAfterAnswer(ans.answers?.[0] ?? "⏳ The model is rate-limited right now — try again in a moment.");
     } catch {
       setError("Could not reach the backend.");
     }
