@@ -62,7 +62,7 @@ export default function DemoPage() {
       <div style={{ marginBottom: 20 }}>
         <span className="eg-pill" style={{ marginBottom: 16 }}><span className="dot" />the Engram workflow</span>
         <h1 style={{ fontSize: 34, fontWeight: 800, letterSpacing: "-0.03em", margin: "0 0 8px", color: "var(--text)" }}>
-          One policy change, start to finish.
+          One policy change, <span style={{ color: "var(--accent)" }}>start to finish.</span>
         </h1>
         <p style={{ fontSize: 15, color: "var(--text-2)", margin: 0, lineHeight: 1.6, maxWidth: 620 }}>
           Watch a company move its remote-work policy from 3 to 5 days — and how Engram

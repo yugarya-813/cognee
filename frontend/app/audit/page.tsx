@@ -75,8 +75,8 @@ export default function AuditPage() {
       {/* Header */}
       <div style={{ marginBottom: 22 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-          <h1 style={{ fontSize: 20, fontWeight: 600, color: "#fff", letterSpacing: "-0.02em", margin: 0 }}>
-            Audit Log
+          <h1 style={{ fontSize: 28, fontWeight: 800, color: "var(--text)", letterSpacing: "-0.03em", margin: 0 }}>
+            Audit <span style={{ color: "var(--accent)" }}>log</span>
           </h1>
           {!loading && (
             <span style={{

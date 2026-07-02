@@ -79,8 +79,8 @@ export default function CommitsPage() {
     <div style={{ padding: "40px 48px", maxWidth: 900 }}>
       <div style={{ marginBottom: 32 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-          <h1 style={{ fontSize: 20, fontWeight: 600, color: "#fff", letterSpacing: "-0.02em", margin: 0 }}>
-            Commits
+          <h1 style={{ fontSize: 28, fontWeight: 800, color: "var(--text)", letterSpacing: "-0.03em", margin: 0 }}>
+            Commit <span style={{ color: "var(--accent)" }}>history</span>
           </h1>
           {!loading && (
             <span style={{

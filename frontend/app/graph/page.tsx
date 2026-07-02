@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { API } from "../config";
+import { PageShell, PageHeader, CommitPicker } from "../components/PageKit";
 
 interface Commit {
   id: number;
@@ -66,46 +67,24 @@ export default function GraphPage() {
   }, [selectedCommit]);
 
   return (
-    <div style={{ padding: "40px 48px" }}>
-      <div style={{ marginBottom: 22 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 6 }}>
-          <h1 style={{ fontSize: 20, fontWeight: 600, color: "#fff", letterSpacing: "-0.02em", margin: 0 }}>
-            Knowledge Graph
-          </h1>
-          {graph && (
-            <span style={{
-              fontSize: 12, color: "rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.06)",
-              border: "1px solid rgba(255,255,255,0.08)", borderRadius: 20, padding: "1px 8px",
-            }}>
-              {graph.nodes.length} nodes · {graph.edges.length} relationships
-            </span>
-          )}
+    <PageShell width={1120}>
+      <PageHeader
+        title="Knowledge"
+        accent="graph"
+        subtitle="The memory as a living network — entities, their values, and the facts that connect them. Drag a node to give it a nudge."
+        right={graph ? <span className="eg-chip mono">{graph.nodes.length} nodes · {graph.edges.length} relationships</span> : null}
+      />
+      {commits.length > 0 && selectedCommit !== null && (
+        <div style={{ marginBottom: 18 }}>
+          <CommitPicker commits={commits} value={selectedCommit} onChange={setSelectedCommit} />
         </div>
-        <p style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", margin: "0 0 16px" }}>
-          The memory as a living network — entities, their values, and the facts that connect them.
-          Drag a node to give it a nudge.
-        </p>
-
-        {commits.length > 0 && selectedCommit !== null && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.28)", marginRight: 2 }}>Snapshot</span>
-            {commits.map((c) => (
-              <CommitPill
-                key={c.id}
-                label={`#${c.id}`}
-                title={c.message}
-                active={c.id === selectedCommit}
-                onClick={() => setSelectedCommit(c.id)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
+      )}
 
       <div style={{
         background: "radial-gradient(circle at 50% 35%, #131826 0%, #0D101A 70%)",
-        border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12,
+        border: "1px solid var(--hairline)", borderRadius: 12,
         overflow: "hidden", position: "relative",
+        width: "100%", height: 600,
       }}>
         {loading && (
           <div style={{ height: HEIGHT, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.2)", fontSize: 13 }}>
@@ -126,7 +105,7 @@ export default function GraphPage() {
       </div>
 
       <AskPanel commit={selectedCommit} />
-    </div>
+    </PageShell>
   );
 }
 
@@ -163,6 +142,7 @@ function ForceGraph({ data }: { data: GraphData }) {
     nodesRef.current = seeded;
     mapRef.current = new Map(seeded.map((n) => [n.id, n]));
     energyRef.current = 1;
+    setTick((t) => (t + 1) % 1000000); // paint the seeded layout immediately (don't wait for the first rAF)
   }, [data]);
 
   // continuous simulation loop
@@ -246,7 +226,8 @@ function ForceGraph({ data }: { data: GraphData }) {
 
   return (
     <svg
-      width="100%" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} style={{ display: "block", height: HEIGHT }}
+      width="100%" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="xMidYMid slice"
+      style={{ display: "block", width: "100%", height: "100%" }}
       onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp}
     >
       <defs>

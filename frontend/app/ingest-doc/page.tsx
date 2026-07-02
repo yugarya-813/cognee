@@ -121,8 +121,8 @@ export default function IngestPage() {
     <div style={{ padding: "40px 48px", maxWidth: 1080 }}>
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 600, color: "#fff", letterSpacing: "-0.02em", margin: 0 }}>
-          Ingest a document
+        <h1 style={{ fontSize: 28, fontWeight: 800, color: "var(--text)", letterSpacing: "-0.03em", margin: 0 }}>
+          Ingest a <span style={{ color: "var(--accent)" }}>document</span>
         </h1>
         <p style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", marginTop: 5, maxWidth: 680, lineHeight: 1.6 }}>
           Drop in a document. Cognee extracts its entities and relationships, Engram reconciles them

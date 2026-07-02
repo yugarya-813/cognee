@@ -113,13 +113,6 @@ export default function TopNav() {
             )}
           </div>
 
-          {/* Primary CTA */}
-          <Link href="/demo" className="eg-btn eg-btn-primary" style={{ marginLeft: 10, padding: "8px 15px", fontSize: 13, flexShrink: 0 }}>
-            Run the demo
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style={{ flexShrink: 0 }}>
-              <path d="M2.5 6.5h7M6.5 3l3.5 3.5L6.5 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </Link>
         </nav>
       </div>
     </header>

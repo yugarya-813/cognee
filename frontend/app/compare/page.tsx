@@ -69,7 +69,7 @@ export default function ComparePage() {
       <div style={{ marginBottom: 24 }}>
         <span className="eg-pill" style={{ marginBottom: 14 }}><span className="dot" />the payoff</span>
         <h1 style={{ fontSize: 30, fontWeight: 800, color: "var(--text)", letterSpacing: "-0.03em", margin: 0 }}>
-          Three kinds of memory. One is trustworthy.
+          Three kinds of memory. One is <span style={{ color: "var(--accent)" }}>trustworthy.</span>
         </h1>
         <p style={{ fontSize: 14.5, color: "var(--text-2)", marginTop: 8, maxWidth: 660, lineHeight: 1.6 }}>
           The same model answers each time — only what it&apos;s allowed to remember changes.

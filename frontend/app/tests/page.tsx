@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { API } from "../config";
+import { PageShell, PageHeader, CommitPicker } from "../components/PageKit";
 
 interface Commit {
   id: number;
@@ -86,77 +87,31 @@ export default function TestsPage() {
   const totalCount = runResult?.total ?? tests.length;
 
   return (
-    <div style={{ padding: "40px 48px", maxWidth: 820 }}>
-      {/* Header */}
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-            <h1 style={{ fontSize: 20, fontWeight: 600, color: "#fff", letterSpacing: "-0.02em", margin: 0 }}>
-              Tests
-            </h1>
-            <span style={{
-              fontSize: 12,
-              color: "rgba(255,255,255,0.3)",
-              background: "rgba(255,255,255,0.06)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              borderRadius: 20,
-              padding: "1px 8px",
-            }}>
-              {totalCount}
-            </span>
-          </div>
-
+    <PageShell width={900}>
+      <PageHeader
+        title="Memory"
+        accent="tests"
+        subtitle={`Each test asks the memory a question and checks the answer — the safety net that catches a bad change before it ships. ${totalCount} checks.`}
+        right={
           <button
             onClick={handleRun}
             disabled={running || selectedCommit === null}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 7,
-              padding: "8px 16px",
-              background: running ? "rgba(59,130,246,0.2)" : "#3B82F6",
-              border: "none",
-              borderRadius: 8,
-              fontSize: 13,
-              fontWeight: 500,
-              color: running ? "rgba(255,255,255,0.5)" : "#fff",
-              cursor: running ? "not-allowed" : "pointer",
-              transition: "background 150ms",
-              fontFamily: "inherit",
-              flexShrink: 0,
-            }}
+            className="eg-btn eg-btn-primary"
+            style={{ padding: "10px 18px", fontSize: 13.5 }}
           >
-            {running ? (
-              <>
-                <Spinner /> Running…
-              </>
-            ) : (
-              <>
-                <RunIcon /> Run tests
-              </>
-            )}
+            {running ? (<><Spinner /> Running…</>) : (<><RunIcon /> Run tests</>)}
           </button>
-        </div>
-        <p style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", marginTop: 4 }}>
-          AI-powered memory checks — each test asks Cognee a question and verifies the answer
-        </p>
-      </div>
+        }
+      />
 
-      {/* Commit selector */}
       {commits.length > 0 && selectedCommit !== null && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 24 }}>
-          <span style={{ fontSize: 12, color: "rgba(255,255,255,0.28)", marginRight: 2 }}>At</span>
-          {commits.map((c) => {
-            const active = c.id === selectedCommit;
-            return (
-              <CommitPill
-                key={c.id}
-                label={`#${c.id} · ${c.message}`}
-                active={active}
-                onClick={() => { setSelectedCommit(c.id); setRunResult(null); }}
-              />
-            );
-          })}
+        <div style={{ marginBottom: 22 }}>
+          <CommitPicker
+            commits={commits}
+            value={selectedCommit}
+            onChange={(id) => { setSelectedCommit(id); setRunResult(null); }}
+            label="At"
+          />
         </div>
       )}
 
@@ -358,7 +313,7 @@ export default function TestsPage() {
           );
         })}
       </div>
-    </div>
+    </PageShell>
   );
 }
 

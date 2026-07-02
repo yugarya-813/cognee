@@ -87,8 +87,8 @@ export default function ChangesPage() {
   return (
     <div style={{ padding: "40px 48px", maxWidth: 900 }}>
       <div style={{ marginBottom: 28 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 600, color: "#fff", letterSpacing: "-0.02em", margin: 0 }}>
-          Changes
+        <h1 style={{ fontSize: 28, fontWeight: 800, color: "var(--text)", letterSpacing: "-0.03em", margin: 0 }}>
+          Review the <span style={{ color: "var(--accent)" }}>diff</span>
         </h1>
         <p style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", marginTop: 5 }}>
           Diff the facts &amp; relationships between any two memory snapshots.

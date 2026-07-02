@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { API } from "../config";
+import { PageShell, PageHeader, CommitPicker } from "../components/PageKit";
 
 interface Commit {
   id: number;
@@ -56,32 +57,16 @@ export default function AskPage() {
   }
 
   return (
-    <div style={{ padding: "40px 48px", maxWidth: 720 }}>
-      {/* Header */}
-      <div style={{ marginBottom: 32 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 600, color: "#fff", letterSpacing: "-0.02em", margin: 0 }}>
-          Ask
-        </h1>
-        <p style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", marginTop: 5 }}>
-          Query the AI&apos;s memory at any point in history
-        </p>
-      </div>
+    <PageShell width={780}>
+      <PageHeader
+        title="Ask the"
+        accent="memory"
+        subtitle="Query the AI's memory as it stood at any commit in its history."
+      />
 
-      {/* Commit selector pills */}
       {commits.length > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
-          <span style={{ fontSize: 12, color: "rgba(255,255,255,0.28)", marginRight: 2 }}>At</span>
-          {commits.map((c) => {
-            const active = c.id === selectedCommit;
-            return (
-              <CommitPill
-                key={c.id}
-                label={`#${c.id} · ${c.message}`}
-                active={active}
-                onClick={() => setSelectedCommit(c.id)}
-              />
-            );
-          })}
+        <div style={{ marginBottom: 18 }}>
+          <CommitPicker commits={commits} value={selectedCommit} onChange={setSelectedCommit} label="At" />
         </div>
       )}
 
@@ -110,19 +95,8 @@ export default function AskPage() {
         <button
           type="submit"
           disabled={loading || !question.trim()}
-          style={{
-            padding: "12px 22px",
-            background: loading || !question.trim() ? "rgba(59,130,246,0.25)" : "#3B82F6",
-            border: "none",
-            borderRadius: 10,
-            fontSize: 14,
-            fontWeight: 500,
-            color: loading || !question.trim() ? "rgba(255,255,255,0.4)" : "#fff",
-            cursor: loading || !question.trim() ? "not-allowed" : "pointer",
-            transition: "background 150ms, color 150ms",
-            fontFamily: "inherit",
-            flexShrink: 0,
-          }}
+          className="eg-btn eg-btn-primary"
+          style={{ padding: "12px 24px", fontSize: 14, flexShrink: 0 }}
         >
           {loading ? "Thinking…" : "Ask"}
         </button>
@@ -185,7 +159,7 @@ export default function AskPage() {
           )}
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }
 

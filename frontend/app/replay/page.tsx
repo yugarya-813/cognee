@@ -84,8 +84,8 @@ export default function ReplayPage() {
     <div style={{ padding: "40px 48px", maxWidth: 960 }}>
       {/* Header */}
       <div style={{ marginBottom: 22 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 600, color: "#fff", letterSpacing: "-0.02em", margin: 0 }}>
-          Replay
+        <h1 style={{ fontSize: 28, fontWeight: 800, color: "var(--text)", letterSpacing: "-0.03em", margin: 0 }}>
+          Rewind the <span style={{ color: "var(--accent)" }}>memory</span>
         </h1>
         <p style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", marginTop: 5, maxWidth: 660, lineHeight: 1.6 }}>
           Scrub through the AI&apos;s memory over time. Drag the slider across commits and watch the

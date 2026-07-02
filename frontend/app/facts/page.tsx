@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense } from "react";
-
 import { API } from "../config";
+import { PageShell, PageHeader, CommitPicker } from "../components/PageKit";
 
 interface Fact {
   id: number;
@@ -16,12 +15,7 @@ interface Fact {
   status: string;
   created_at: string;
 }
-
-interface Commit {
-  id: number;
-  message: string;
-  created_at: string;
-}
+interface Commit { id: number; message: string; created_at: string }
 
 function FactsContent() {
   const searchParams = useSearchParams();
@@ -36,14 +30,10 @@ function FactsContent() {
       .then((r) => r.json())
       .then((data: Commit[]) => {
         setCommits(data);
-        const paramCommit = searchParams.get("commit");
-        const commit = paramCommit
-          ? parseInt(paramCommit)
-          : data.length > 0
-          ? data[data.length - 1].id
-          : 1;
-        setSelectedCommit(commit);
+        const p = searchParams.get("commit");
+        setSelectedCommit(p ? parseInt(p) : data.length > 0 ? data[data.length - 1].id : 1);
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -51,10 +41,7 @@ function FactsContent() {
     setLoading(true);
     fetch(`${API}/facts?commit=${selectedCommit}`)
       .then((r) => r.json())
-      .then((data: Fact[]) => {
-        setFacts(data);
-        setLoading(false);
-      });
+      .then((data: Fact[]) => { setFacts(data); setLoading(false); });
   }, [selectedCommit]);
 
   function selectCommit(id: number) {
@@ -62,182 +49,81 @@ function FactsContent() {
     router.replace(`/facts?commit=${id}`);
   }
 
+  // group facts by subject, preserving first-seen order
+  const groups: { subject: string; facts: Fact[] }[] = [];
+  const idx = new Map<string, number>();
+  for (const f of facts) {
+    if (!idx.has(f.subject)) { idx.set(f.subject, groups.length); groups.push({ subject: f.subject, facts: [] }); }
+    groups[idx.get(f.subject)!].facts.push(f);
+  }
+
   return (
-    <div style={{ padding: "40px 48px" }}>
-      {/* Header */}
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14 }}>
-          <h1 style={{ fontSize: 20, fontWeight: 600, color: "#fff", letterSpacing: "-0.02em", margin: 0 }}>
-            Facts
-          </h1>
-          {!loading && (
-            <span style={{
-              fontSize: 12,
-              color: "rgba(255,255,255,0.3)",
-              background: "rgba(255,255,255,0.06)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              borderRadius: 20,
-              padding: "1px 8px",
-            }}>
-              {facts.length} active
-            </span>
-          )}
+    <PageShell width={1040}>
+      <PageHeader
+        title="Active"
+        accent="facts"
+        subtitle="Everything the AI currently knows at this commit — grouped by the entity it describes."
+        right={
+          !loading ? (
+            <span className="eg-chip mono">{facts.length} facts · {groups.length} entities</span>
+          ) : null
+        }
+      />
+
+      {commits.length > 0 && selectedCommit !== null && (
+        <div style={{ marginBottom: 22 }}>
+          <CommitPicker commits={commits} value={selectedCommit} onChange={selectCommit} />
         </div>
+      )}
 
-        {/* Commit selector — pills, not a dropdown */}
-        {commits.length > 0 && selectedCommit !== null && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.28)", marginRight: 2 }}>
-              Snapshot
-            </span>
-            {commits.map((c) => {
-              const active = c.id === selectedCommit;
-              return (
-                <CommitPill
-                  key={c.id}
-                  label={`#${c.id} · ${c.message}`}
-                  active={active}
-                  onClick={() => selectCommit(c.id)}
-                />
-              );
-            })}
-          </div>
-        )}
-      </div>
+      {loading && <div style={{ color: "var(--text-3)", fontSize: 13 }}>Loading…</div>}
 
-      {/* Table */}
-      <div style={{
-        background: "#10131D",
-        border: "1px solid rgba(255,255,255,0.07)",
-        borderRadius: 12,
-        overflow: "hidden",
-      }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead>
-            <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-              {[
-                { label: "Subject", width: "22%" },
-                { label: "Predicate", width: "22%" },
-                { label: "Object", width: "40%" },
-                { label: "Source", width: "16%" },
-              ].map((col) => (
-                <th
-                  key={col.label}
-                  style={{
-                    padding: "12px 20px",
-                    textAlign: "left",
-                    fontSize: 11,
-                    fontWeight: 500,
-                    color: "rgba(255,255,255,0.3)",
-                    letterSpacing: "0.07em",
-                    textTransform: "uppercase",
-                    width: col.width,
-                  }}
-                >
-                  {col.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td colSpan={4} style={{ padding: "52px 20px", textAlign: "center", color: "rgba(255,255,255,0.2)", fontSize: 13 }}>
-                  Loading…
-                </td>
-              </tr>
-            )}
+      {!loading && facts.length === 0 && (
+        <div className="eg-panel" style={{ padding: "48px 24px", textAlign: "center", color: "var(--text-3)", fontSize: 13 }}>
+          No facts found for this commit.
+        </div>
+      )}
 
-            {!loading && facts.length === 0 && (
-              <tr>
-                <td colSpan={4} style={{ padding: "52px 20px", textAlign: "center", color: "rgba(255,255,255,0.2)", fontSize: 13 }}>
-                  No facts found for this commit.
-                </td>
-              </tr>
-            )}
-
-            {!loading && facts.map((fact, i) => (
-              <FactRow key={fact.id} fact={fact} isLast={i === facts.length - 1} />
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function CommitPill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  const [hovered, setHovered] = useState(false);
-  return (
-    <button
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        padding: "4px 11px",
-        borderRadius: 6,
-        fontSize: 12,
-        fontWeight: active ? 500 : 400,
-        border: `1px solid ${active ? "rgba(59,130,246,0.55)" : hovered ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.09)"}`,
-        background: active ? "rgba(59,130,246,0.12)" : hovered ? "rgba(255,255,255,0.04)" : "transparent",
-        color: active ? "#3B82F6" : hovered ? "rgba(255,255,255,0.65)" : "rgba(255,255,255,0.4)",
-        cursor: "pointer",
-        transition: "all 150ms",
-        fontFamily: "inherit",
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
-function FactRow({ fact, isLast }: { fact: Fact; isLast: boolean }) {
-  const [hovered, setHovered] = useState(false);
-  return (
-    <tr
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        borderBottom: isLast ? "none" : "1px solid rgba(255,255,255,0.04)",
-        background: hovered ? "#141827" : "transparent",
-        transition: "background 120ms",
-      }}
-    >
-      <td style={{ padding: "13px 20px", color: "#fff", fontWeight: 500 }}>
-        {fact.subject}
-      </td>
-      <td style={{ padding: "13px 20px", color: "rgba(255,255,255,0.4)", fontStyle: "italic" }}>
-        {fact.predicate}
-      </td>
-      <td style={{ padding: "13px 20px", color: "rgba(255,255,255,0.82)" }}>
-        {fact.object}
-      </td>
-      <td style={{ padding: "13px 20px" }}>
-        {fact.source ? (
-          <span style={{
-            fontSize: 11,
-            color: "rgba(255,255,255,0.38)",
-            background: "rgba(255,255,255,0.05)",
-            border: "1px solid rgba(255,255,255,0.08)",
-            padding: "2px 8px",
-            borderRadius: 4,
-            fontFamily: "'SF Mono', 'Fira Code', monospace",
-          }}>
-            {fact.source}
-          </span>
-        ) : (
-          <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 13 }}>—</span>
-        )}
-      </td>
-    </tr>
+      {!loading && groups.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(460px, 1fr))", gap: 14 }}>
+          {groups.map((g) => (
+            <div key={g.subject} className="eg-panel" style={{ padding: "16px 18px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 12 }}>
+                <span style={{ width: 7, height: 7, borderRadius: 2, background: "var(--accent)" }} />
+                <span style={{ fontSize: 14.5, fontWeight: 650, color: "var(--text)" }}>{g.subject}</span>
+                <span className="mono" style={{ fontSize: 11, color: "var(--text-4)", marginLeft: "auto" }}>
+                  {g.facts.length}
+                </span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {g.facts.map((f) => (
+                  <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderTop: "1px solid var(--hairline)" }}>
+                    <span style={{ fontSize: 12.5, color: "var(--text-3)", fontStyle: "italic", minWidth: 92, flexShrink: 0 }}>
+                      {f.predicate}
+                    </span>
+                    <span style={{ fontSize: 13, color: "var(--text)", flex: 1 }}>{f.object}</span>
+                    {f.source && (
+                      <span className="mono" style={{
+                        fontSize: 10.5, color: "var(--text-4)", background: "rgba(255,255,255,0.04)",
+                        border: "1px solid var(--hairline)", padding: "1px 6px", borderRadius: 4, flexShrink: 0,
+                      }}>
+                        {f.source}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </PageShell>
   );
 }
 
 export default function FactsPage() {
   return (
-    <Suspense fallback={
-      <div style={{ padding: 48, color: "rgba(255,255,255,0.25)", fontSize: 13 }}>Loading…</div>
-    }>
+    <Suspense fallback={<div style={{ padding: 48, color: "var(--text-3)", fontSize: 13 }}>Loading…</div>}>
       <FactsContent />
     </Suspense>
   );
